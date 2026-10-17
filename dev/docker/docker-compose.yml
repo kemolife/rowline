@@ -1,0 +1,12 @@
+# Local MySQL for Rowline's Rust tests (scripts/test-rust.sh). Start: docker compose up -d
+name: rowline-test-db
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+    ports: ["127.0.0.1:13306:3306"]
+    volumes: ["./init:/docker-entrypoint-initdb.d:ro"]

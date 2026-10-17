@@ -1,0 +1,506 @@
+@import 'tailwindcss';
+
+/* Design tokens. The app starts in dark (data-theme='dark'); 'system' follows the OS. */
+:root {
+  --bg: #faf9f5;
+  --surface: #ffffff;
+  --surface-2: #f4f2ec;
+  --surface-3: #ebe8df;
+  --border: #e6e3d9;
+  --border-strong: #d5d1c4;
+  --text: #1f1e1d;
+  --text-2: #5e5d58;
+  --text-3: #8f8d86;
+  --accent: #c96442;
+  --accent-hover: #b4583a;
+  --accent-soft: #f6e6df;
+  --accent-text: #ffffff;
+  --selection: #f3dfd5;
+  --danger: #c2413a;
+  --danger-soft: #fae3e1;
+  --success: #3f8a5c;
+  --warning: #b7791f;
+  --null: #a8a59c;
+  --sel: #e8f0fb;
+  --sel-strong: #4a7fc4;
+  --link: #2f62a6;
+  --null-faint: #c9c4ba;
+  --badge-pk: #f4e7c8;
+  --badge-fk: #e3ecf8;
+  --edited: #fff3c9;
+  --inserted: #e2f4e7;
+  --deleted: #fbe1df;
+  --env-local: #3f8a5c;
+  --env-dev: #3b72c4;
+  --env-staging: #c27c1a;
+  --env-prod: #c2413a;
+  --shadow: 0 1px 2px rgba(31, 30, 29, 0.06), 0 4px 16px rgba(31, 30, 29, 0.06);
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #1c1b19;
+    --surface: #242321;
+    --surface-2: #2b2a27;
+    --surface-3: #34332f;
+    --border: #363531;
+    --border-strong: #46443f;
+    --text: #f2f0e9;
+    --text-2: #b9b6ad;
+    --text-3: #85827a;
+    --accent: #d97757;
+    --accent-hover: #e38a6c;
+    --accent-soft: #3d2a22;
+    --accent-text: #1c1b19;
+    --selection: #4a3127;
+    --danger: #e0645c;
+    --danger-soft: #43211f;
+    --success: #6bbf8a;
+    --warning: #e0a650;
+    --null: #6f6c65;
+    --sel: #22314a;
+    --sel-strong: #6f9fe0;
+    --link: #8db4ec;
+    --null-faint: #5a5751;
+    --badge-pk: #4a3f22;
+    --badge-fk: #26344a;
+    --edited: #4a4120;
+    --inserted: #21402c;
+    --deleted: #4a2523;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #1c1b19;
+  --surface: #242321;
+  --surface-2: #2b2a27;
+  --surface-3: #34332f;
+  --border: #363531;
+  --border-strong: #46443f;
+  --text: #f2f0e9;
+  --text-2: #b9b6ad;
+  --text-3: #85827a;
+  --accent: #d97757;
+  --accent-hover: #e38a6c;
+  --accent-soft: #3d2a22;
+  --accent-text: #1c1b19;
+  --selection: #4a3127;
+  --danger: #e0645c;
+  --danger-soft: #43211f;
+  --success: #6bbf8a;
+  --warning: #e0a650;
+  --null: #6f6c65;
+  --sel: #22314a;
+  --sel-strong: #6f9fe0;
+  --link: #8db4ec;
+  --null-faint: #5a5751;
+  --badge-pk: #4a3f22;
+  --badge-fk: #26344a;
+  --edited: #4a4120;
+  --inserted: #21402c;
+  --deleted: #4a2523;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-ink-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-sel: var(--sel);
+  --color-sel-strong: var(--sel-strong);
+  --color-link: var(--link);
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* the app fills the window; the page itself never scrolls */
+html,
+body {
+  overflow: hidden;
+}
+
+/* Menus, dialogs and the grid's cell editor render here; keep them above the grid's own layers */
+/* Overlays (grid cell editor, menus) are drawn here. It must be fixed at the window's top-left corner:
+   the grid positions its editor relative to it. In the normal page flow the editor ended up below the
+   app, off-screen, so cells could not be edited in the grid. */
+#portal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+select,
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+/* Reusable bits; in the components layer so Tailwind utilities can override them */
+@layer components {
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.btn-danger {
+  color: var(--danger);
+}
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: transparent;
+  color: var(--text);
+}
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: var(--text-2);
+  border: none;
+  background: transparent;
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.icon-btn:disabled {
+  opacity: 0.4;
+}
+
+.field {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.field-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.kbd {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0 5px;
+  line-height: 16px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+}
+
+/* CodeMirror */
+.cm-editor {
+  height: 100%;
+  font-size: 12.5px;
+  background: var(--surface) !important;
+}
+.filter-input .cm-editor {
+  background: transparent !important;
+}
+.cm-editor.cm-focused {
+  outline: none !important;
+}
+.cm-scroller {
+  font-family: var(--font-mono) !important;
+  line-height: 1.6 !important;
+}
+.cm-gutters {
+  background: var(--surface) !important;
+  border-right: 1px solid var(--border) !important;
+  color: var(--text-3) !important;
+}
+.cm-activeLine,
+.cm-activeLineGutter {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent) !important;
+}
+.cm-current-statement {
+  background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+/* suggestion list (query editor and WHERE filter) */
+.cm-tooltip.cm-tooltip-autocomplete {
+  margin-top: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 10px !important;
+  background: var(--surface-2) !important;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul {
+  min-width: 260px;
+  max-height: 280px !important;
+  font-family: var(--font-mono) !important;
+  font-size: 12px;
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px !important;
+  border-radius: 6px;
+  line-height: 18px;
+  color: var(--text);
+}
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft) !important;
+  color: var(--text) !important;
+}
+.cm-completionLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-completionMatchedText {
+  text-decoration: none !important;
+  color: var(--accent);
+  font-weight: 600;
+}
+.cm-completionDetail {
+  margin-left: 12px !important;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal !important;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.cm-completionIcon {
+  --icon: var(--text-3);
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px !important;
+  height: 18px;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 5px;
+  opacity: 1 !important;
+  background: color-mix(in srgb, var(--icon) 16%, transparent);
+  color: var(--icon);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+}
+.cm-completionIcon::after {
+  content: '·' !important;
+}
+.cm-completionIcon-property {
+  --icon: var(--env-dev);
+}
+.cm-completionIcon-property::after {
+  content: 'C' !important;
+}
+.cm-completionIcon-keyword {
+  --icon: var(--accent);
+}
+.cm-completionIcon-keyword::after {
+  content: 'K' !important;
+}
+.cm-completionIcon-function {
+  --icon: var(--success);
+}
+.cm-completionIcon-function::after {
+  content: 'ƒ' !important;
+}
+.cm-completionIcon-type,
+.cm-completionIcon-class {
+  --icon: var(--warning);
+}
+.cm-completionIcon-type::after,
+.cm-completionIcon-class::after {
+  content: 'T' !important;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fade-in {
+  animation: fade-in 0.14s ease-out;
+}
+
+/* Claude answers (Markdown) */
+.chat-md > * + * {
+  margin-top: 0.6em;
+}
+.chat-md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+.chat-md pre {
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.chat-md pre code {
+  padding: 0;
+  background: none;
+}
+.chat-md ul,
+.chat-md ol {
+  padding-left: 1.3em;
+  list-style: disc;
+}
+.chat-md ol {
+  list-style: decimal;
+}
+.chat-md table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.chat-md th,
+.chat-md td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+}
+
+/* ▶ next to each statement in the SQL editor */
+.cm-run-gutter {
+  width: 18px;
+}
+.cm-run-marker {
+  padding-left: 4px;
+  font-size: 10px;
+  line-height: inherit;
+  color: var(--accent);
+  opacity: 0.6;
+  cursor: pointer;
+}
+.cm-run-marker:hover {
+  color: var(--accent);
+  opacity: 1;
+}

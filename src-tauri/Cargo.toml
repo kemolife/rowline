@@ -1,0 +1,48 @@
+[package]
+name = "rowline"
+version = "0.1.0"
+description = "Rowline — a fast, modern MySQL and SQLite client"
+authors = ["Vitalii Antoniuk"]
+license = ""
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "rowline_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "rowline"
+path = "src/main.rs"
+
+[[bin]]
+name = "devserver"
+path = "src/bin/devserver.rs"
+required-features = ["devserver"]
+
+[features]
+# HTTP bridge to the same commands, for testing the UI in a normal browser
+devserver = ["dep:tower-http"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+mysql_async = { version = "0.37", features = ["native-tls-tls"] }
+rusqlite = { version = "0.40", features = ["bundled", "column_decltype", "backup"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "6"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
