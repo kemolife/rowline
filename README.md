@@ -7,6 +7,23 @@ in one small app that opens instantly.
 Built with Tauri 2 + Rust (backend) and React + TypeScript (frontend).
 Design notes: [docs/design.md](docs/design.md), [docs/plan.md](docs/plan.md).
 
+## Install
+
+There is no prebuilt download yet, so build the app from source.
+Requirements: macOS, Rust (stable, 1.90+), Node 22+.
+
+```bash
+git clone https://github.com/kemolife/rowline.git
+cd rowline
+npm install
+npm run tauri build -- --bundles app   # → src-tauri/target/release/bundle/macos/Rowline.app
+cp -R src-tauri/target/release/bundle/macos/Rowline.app /Applications/
+```
+
+The build is not code-signed. On first launch, use right-click → Open if macOS blocks it.
+
+The Claude panel needs [Claude Code](https://claude.com/claude-code) installed and logged in. Everything else works without it.
+
 ## Features
 
 ### Connections
@@ -184,8 +201,4 @@ cd dev/docker && docker compose up -d   # MySQL 8.4 on 127.0.0.1:13306 with a sm
 
 ## Build
 
-```bash
-npm run tauri build -- --bundles app   # → src-tauri/target/release/bundle/macos/Rowline.app
-```
-
-The build is not code-signed. On first launch, use right-click → Open if macOS blocks it.
+See [Install](#install) for the release build.
