@@ -1,6 +1,7 @@
 import { Code2, LogOut, PanelLeft, Search, Sparkles } from 'lucide-react';
 import { ENV_LABEL, MOD, cx, envColor } from '../lib/ui';
-import { useApp, wsActiveTab } from '../store/app';
+import { useApp, useProjects, wsActiveTab } from '../store/app';
+import ProjectBadge from './ProjectBadge';
 import { useWs, useWsActions } from '../store/workspace';
 import BackupMenu from './BackupMenu';
 
@@ -18,14 +19,11 @@ export default function Header({ trafficLightSpace }: { trafficLightSpace: boole
   const object = tab?.kind === 'table' ? tab.table : tab?.kind === 'query' ? tab.title : tab?.kind === 'diagram' ? 'Relations' : null;
   const database = session.config.engine === 'sqlite' ? session.info.currentDatabase : session.database;
   // SQLite connections are often named after their file; don't show the same text twice
+  const project = useProjects().get(session.connectionId) ?? null;
   const parts = [session.info.version, session.config.name, database !== session.config.name ? database : null, object];
 
   return (
-    <header
-      className="drag flex h-11 shrink-0 items-center gap-1 border-b border-line bg-bg pr-2"
-      style={{ paddingLeft: trafficLightSpace ? 32 : 8 }}
-      data-tauri-drag-region
-    >
+    <header className="drag flex h-11 shrink-0 items-center gap-1 border-b border-line bg-bg pr-2" style={{ paddingLeft: trafficLightSpace ? 32 : 8 }} data-tauri-drag-region>
       <button className="icon-btn no-drag" onClick={toggleSidebar} title={`Toggle sidebar (${MOD}B)`} aria-label="Toggle sidebar">
         <PanelLeft size={16} />
       </button>
@@ -48,9 +46,8 @@ export default function Header({ trafficLightSpace }: { trafficLightSpace: boole
           <span className="shrink-0 rounded px-1.5 py-px text-[10.5px] font-bold uppercase tracking-wide text-white" style={{ background: envColor(env) }}>
             {ENV_LABEL[env]}
           </span>
-          <span className="truncate text-ink-2">
-            {parts.filter(Boolean).join('  ·  ')}
-          </span>
+          {project && <ProjectBadge project={project} full className="px-1.5 py-[3px] text-[10.5px]" />}
+          <span className="truncate text-ink-2">{parts.filter(Boolean).join('  ·  ')}</span>
         </button>
       </div>
 

@@ -32,6 +32,16 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 - Environment tag — Local, Dev, Staging, Production — shown as a colored badge in the header.
   A Production connection gets a red frame around the whole window, and its writes always ask for confirmation.
   The Review changes dialog shows the environment, connection and database the SQL will run on.
+- **Projects**: give a connection a project (connection form → *Project*). The connection list is grouped by
+  project; in the rail, a project's connections sit together under a colored badge, with a stripe in the
+  project color; the header shows the project too. Colors come from the name, nothing to set up.
+  Without a project, Rowline guesses one: connections whose names start with the same word (`2solar dev`,
+  `2Solar-prod`) or that open the same database are grouped (at least two). Guessed projects have a dashed badge;
+  *Use* in the connection form keeps the guess.
+- The connection list shows one card per project (fold it up with the header): connections sorted Production first,
+  host · user · database, when each was last opened, and the last one used has a dark Connect button.
+  *New project* picks a name and its connections; drag a connection onto another project to move it;
+  the ⋯ of a project renames it, ungroups it, or keeps a guessed project.
 - Several connections open at once. The connection rail on the left switches between them (`⌘1`…`⌘9`);
   each one keeps its own tabs, query text and Claude chat.
 - Right-click a connection in the rail to edit, rename or disconnect it, or click its label in the header.
@@ -67,6 +77,9 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 
 - Editor with schema autocomplete; ▶ next to every statement runs just that one; Beautify (`⌘I`).
 - Run the statement at the cursor (`⌘↵`), run all (`⌘⇧↵`), run a selection, cancel (`⌘.`); a row limit per tab.
+- Completion like PhpStorm: only what fits where the cursor is — statement words at the start (`SE` → SELECT),
+  tables after FROM / JOIN, columns of the query's tables after SELECT / WHERE / ON / BY, `alias.` → its columns.
+  Tab or Enter takes the highlighted one; what you pick often moves up.
 - `JOIN ` suggests tables related to the ones in the query, with the ON part (foreign keys, virtual and guessed).
 - Warnings while you type: unknown tables and columns, `UPDATE` / `DELETE` without `WHERE` (running one asks first).
 - Every run is kept while the tab is open: step back to an earlier result without running the query again.

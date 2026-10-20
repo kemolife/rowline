@@ -1,6 +1,7 @@
 import { CheckCircle2, FolderOpen, Loader2, X, XCircle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, pickFolder, pickSqliteFile } from '../lib/api';
+import { effectiveProjects, projectColor } from '../lib/projects';
 import { effectiveClaudeAccess, type ClaudeAccess, type ConnectionInput, type Engine, type Environment, type TlsMode } from '../lib/types';
 import { ENV_LABEL, cx, envColor } from '../lib/ui';
 import { useApp } from '../store/app';
@@ -19,12 +20,23 @@ const CLAUDE_ACCESS: { value: ClaudeAccess; label: string; hint: string }[] = [
 ];
 
 export default function ConnectionForm() {
+  // existing projects, for the suggestions (joined to a string so the selector result stays stable)
+  const projects = useApp((st) => [...new Set(st.connections.map((c) => c.group?.trim()).filter((g): g is string => !!g))].sort().join('\n'))
+    .split('\n')
+    .filter(Boolean);
   const editing = useApp((s) => s.editing)!;
+  const allConnections = useApp((s) => s.connections);
   const setEditing = useApp((s) => s.setEditing);
   const loadConnections = useApp((s) => s.loadConnections);
   const connect = useApp((s) => s.connect);
   const isNew = !editing.id;
   const [form, setForm] = useState<ConnectionInput>(editing);
+  // project guessed from the other connections (same first word of the name, or same database), shown until one is typed
+  const guess = useMemo(() => {
+    const me = { ...form, id: form.id || '__new__', name: form.name || defaultName(form) };
+    const p = effectiveProjects([...allConnections.filter((c) => c.id !== form.id), { ...me, group: null }]).get(me.id);
+    return p?.auto ? p.name : null;
+  }, [form, allConnections]);
   const [passwordTouched, setPasswordTouched] = useState(isNew);
   const [busy, setBusy] = useState<'test' | 'save' | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -46,7 +58,7 @@ export default function ConnectionForm() {
     port: form.engine === 'mysql' ? Number(form.port) || 3306 : null,
     // Claude off: no folder for Claude to read
     projectFolder: effectiveClaudeAccess(form) === 'off' ? null : form.projectFolder?.trim() || null,
-    password: form.engine === 'mysql' && passwordTouched ? form.password ?? '' : undefined,
+    password: form.engine === 'mysql' && passwordTouched ? (form.password ?? '') : undefined,
   });
 
   const test = async () => {
@@ -82,8 +94,7 @@ export default function ConnectionForm() {
     if (path) set({ filePath: path, name: form.name || fileName(path) });
   };
 
-  const switchEngine = (engine: Engine) =>
-    set(engine === 'mysql' ? { engine, host: form.host || '127.0.0.1', port: form.port || 3306, user: form.user || 'root' } : { engine });
+  const switchEngine = (engine: Engine) => set(engine === 'mysql' ? { engine, host: form.host || '127.0.0.1', port: form.port || 3306, user: form.user || 'root' } : { engine });
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]" onMouseDown={() => setEditing(null)}>
@@ -123,10 +134,48 @@ export default function ConnectionForm() {
             ))}
           </div>
 
-          <label className="block space-y-1.5">
-            <span className="label">Name</span>
-            <input className="field" value={form.name} placeholder={defaultName(form)} onChange={(e) => set({ name: e.target.value })} autoFocus />
-          </label>
+          <div className="grid grid-cols-[1fr_200px] gap-2">
+            <label className="block space-y-1.5">
+              <span className="label">Name</span>
+              <input className="field" value={form.name} placeholder={defaultName(form)} onChange={(e) => set({ name: e.target.value })} autoFocus />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="label">Project</span>
+              <div className="relative">
+                {(form.group?.trim() || guess) && (
+                  <span
+                    className={cx('pointer-events-none absolute left-2.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-sm', !form.group?.trim() && 'opacity-50')}
+                    style={{ background: projectColor(form.group?.trim() || guess!) }}
+                  />
+                )}
+                <input
+                  className={cx('field', (form.group?.trim() || guess) && 'pl-7', guess && !form.group?.trim() && 'pr-12')}
+                  value={form.group ?? ''}
+                  placeholder={guess ?? 'e.g. 2Solar'}
+                  title={guess && !form.group?.trim() ? `Guessed from the connection names or database: ${guess}` : undefined}
+                  list="connection-projects"
+                  onChange={(e) => set({ group: e.target.value })}
+                  data-testid="connection-project"
+                />
+                {guess && !form.group?.trim() && (
+                  <button
+                    type="button"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-surface-2"
+                    onClick={() => set({ group: guess })}
+                    title="Keep this project"
+                    data-testid="use-project-guess"
+                  >
+                    Use
+                  </button>
+                )}
+                <datalist id="connection-projects">
+                  {projects.map((p) => (
+                    <option key={p} value={p} />
+                  ))}
+                </datalist>
+              </div>
+            </label>
+          </div>
 
           <div className="space-y-1.5">
             <span className="label">Environment</span>
@@ -136,7 +185,10 @@ export default function ConnectionForm() {
                   type="button"
                   key={env}
                   onClick={() => set({ environment: env })}
-                  className={cx('flex flex-1 items-center justify-center gap-1.5 rounded-lg border py-1.5 text-[12px] font-medium', form.environment === env ? 'border-transparent' : 'border-line text-ink-2 hover:bg-surface-2')}
+                  className={cx(
+                    'flex flex-1 items-center justify-center gap-1.5 rounded-lg border py-1.5 text-[12px] font-medium',
+                    form.environment === env ? 'border-transparent' : 'border-line text-ink-2 hover:bg-surface-2',
+                  )}
                   style={form.environment === env ? { background: `color-mix(in srgb, ${envColor(env)} 14%, transparent)`, color: envColor(env) } : undefined}
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: envColor(env) }} />
@@ -169,7 +221,7 @@ export default function ConnectionForm() {
                   <input
                     className="field field-mono"
                     type="password"
-                    value={passwordTouched ? form.password ?? '' : ''}
+                    value={passwordTouched ? (form.password ?? '') : ''}
                     placeholder={passwordTouched ? '' : 'Saved'}
                     onChange={(e) => {
                       setPasswordTouched(true);
@@ -180,7 +232,9 @@ export default function ConnectionForm() {
                 </label>
               </div>
               <label className="block space-y-1.5">
-                <span className="label">Database <span className="font-normal text-ink-3">(optional)</span></span>
+                <span className="label">
+                  Database <span className="font-normal text-ink-3">(optional)</span>
+                </span>
                 <input className="field field-mono" value={form.database ?? ''} onChange={(e) => set({ database: e.target.value })} />
               </label>
               <div className="space-y-1.5">
@@ -231,7 +285,9 @@ export default function ConnectionForm() {
           </div>
           {effectiveClaudeAccess(form) !== 'off' && (
             <label className="block space-y-1.5">
-              <span className="label">Project folder <span className="font-normal text-ink-3">(optional)</span></span>
+              <span className="label">
+                Project folder <span className="font-normal text-ink-3">(optional)</span>
+              </span>
               <div className="flex gap-2">
                 <input className="field field-mono" value={form.projectFolder ?? ''} placeholder="/path/to/your/app" onChange={(e) => set({ projectFolder: e.target.value })} />
                 <button
@@ -250,7 +306,12 @@ export default function ConnectionForm() {
           )}
 
           {result && (
-            <div className={cx('selectable flex items-start gap-2 rounded-lg px-3 py-2 text-[12px]', result.ok ? 'bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-success' : 'bg-danger-soft text-danger')}>
+            <div
+              className={cx(
+                'selectable flex items-start gap-2 rounded-lg px-3 py-2 text-[12px]',
+                result.ok ? 'bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-success' : 'bg-danger-soft text-danger',
+              )}
+            >
               {result.ok ? <CheckCircle2 size={15} className="mt-px shrink-0" /> : <XCircle size={15} className="mt-px shrink-0" />}
               <span className="break-words">{result.text}</span>
             </div>
