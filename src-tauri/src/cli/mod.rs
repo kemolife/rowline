@@ -37,8 +37,8 @@ Options:
 Rules:
   - Only connections that are open in the Rowline app can be used. Rowline must be running.
   - Read-only: one SELECT, SHOW, DESCRIBE, EXPLAIN or WITH … SELECT statement. Writes, several
-    statements, INTO OUTFILE, FOR UPDATE, LOAD_FILE and similar are refused before they reach
-    the database, and the query runs in a read-only transaction with a 30 s time limit.
+    statements, INTO OUTFILE, FOR UPDATE, LOAD_FILE, GET_LOCK, SLEEP and similar are refused before
+    they reach the database, and the query runs in a read-only transaction with a 30 s time limit.
   - Text values longer than 2,048 characters are cut. Every query is logged in Rowline's History.
 
 Exit codes: 0 ok, 1 error, 2 refused (not read-only), 3 Rowline is not running.

@@ -145,8 +145,8 @@ rowline query -f table -n 20 "SELECT …"               # json (default), table 
   A unique part of the name is enough, and `--conn` is optional with one open connection.
 - The database is the one selected in the app, unless `--db` says otherwise.
 - **Read-only, on every connection**: one SELECT / SHOW / DESCRIBE / EXPLAIN / WITH … SELECT statement.
-  Writes, several statements, `INTO OUTFILE`, `FOR UPDATE`, `LOAD_FILE` and the like are refused before they
-  reach the database (exit code 2), and the query runs in a read-only transaction with a 30 s limit.
+  Writes, several statements, `INTO OUTFILE`, `FOR UPDATE`, `LOAD_FILE`, lock functions (`GET_LOCK`, which would
+  stay on the pooled connection), `SLEEP` and `BENCHMARK` are refused before they reach the database (exit code 2), and the query runs in a read-only transaction with a 30 s limit.
 - At most 200 rows by default (`--limit`, up to 1,000); long text values are cut to 2 KB.
 - Every query, blocked ones too, shows up in the connection's **History** with a *CLI* mark.
 - Exit codes: 0 ok, 1 error, 2 refused, 3 Rowline is not running. `rowline help` explains it all.
