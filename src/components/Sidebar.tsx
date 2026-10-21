@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Clock, Eye, Loader2, RefreshCw, Search, Star, Table2 } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ResizeHandle, usePanelWidth } from '../lib/panelWidth';
 import { useDismiss } from '../lib/useDismiss';
 import type { DbObject } from '../lib/types';
@@ -220,6 +220,11 @@ const PANES: { key: Pane; label: string }[] = [
 export default function Sidebar() {
   const [pane, setPane] = useState<Pane>('items');
   const width = usePanelWidth('sidebar');
+  // a diagram tab comes with its outline
+  const diagramTab = useWs((w) => (w.tabs.find((t) => t.id === w.activeTabId)?.kind === 'diagram' ? w.activeTabId : null));
+  useEffect(() => {
+    if (diagramTab) setPane('diagram');
+  }, [diagramTab]);
   return (
     <aside className="relative flex shrink-0 flex-col border-r border-line bg-bg" style={{ width }}>
       <ResizeHandle panel="sidebar" edge="right" />

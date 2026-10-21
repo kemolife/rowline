@@ -32,6 +32,16 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 - Environment tag — Local, Dev, Staging, Production — shown as a colored badge in the header.
   A Production connection gets a red frame around the whole window, and its writes always ask for confirmation.
   The Review changes dialog shows the environment, connection and database the SQL will run on.
+- **Projects**: give a connection a project (connection form → *Project*). The connection list is grouped by
+  project; in the rail, a project's connections sit together under a colored badge, with a stripe in the
+  project color; the header shows the project too. Colors come from the name, nothing to set up.
+  Without a project, Rowline guesses one: connections whose names start with the same word (`2solar dev`,
+  `2Solar-prod`) or that open the same database are grouped (at least two). Guessed projects have a dashed badge;
+  *Use* in the connection form keeps the guess.
+- The connection list shows one card per project (fold it up with the header): connections sorted Production first,
+  host · user · database, when each was last opened, and the last one used has a dark Connect button.
+  *New project* picks a name and its connections; drag a connection onto another project to move it;
+  the ⋯ of a project renames it, ungroups it, or keeps a guessed project.
 - Several connections open at once. The connection rail on the left switches between them (`⌘1`…`⌘9`);
   each one keeps its own tabs, query text and Claude chat.
 - Right-click a connection in the rail to edit, rename or disconnect it, or click its label in the header.
@@ -67,6 +77,9 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 
 - Editor with schema autocomplete; ▶ next to every statement runs just that one; Beautify (`⌘I`).
 - Run the statement at the cursor (`⌘↵`), run all (`⌘⇧↵`), run a selection, cancel (`⌘.`); a row limit per tab.
+- Completion like PhpStorm: only what fits where the cursor is — statement words at the start (`SE` → SELECT),
+  tables after FROM / JOIN, columns of the query's tables after SELECT / WHERE / ON / BY, `alias.` → its columns.
+  Tab or Enter takes the highlighted one; what you pick often moves up.
 - `JOIN ` suggests tables related to the ones in the query, with the ON part (foreign keys, virtual and guessed).
 - Warnings while you type: unknown tables and columns, `UPDATE` / `DELETE` without `WHERE` (running one asks first).
 - Every run is kept while the tab is open: step back to an earlier result without running the query again.
@@ -89,17 +102,24 @@ From the `⋯` menu in the header, with progress and Cancel.
 
 Sidebar → **Diagram** → *Open relation diagram*.
 
-- Tables with their key columns (max 12 per box; all columns in the side panel) and their relations, laid out
-  automatically. Zoom, pan, drag tables, search, minimap. Tables without relations are hidden (search still finds them).
+- Tables with their key columns (max 12 per box) and their relations, laid out automatically. Zoom, pan, drag
+  tables, minimap. Zoomed out below 85%, boxes show only the table name. Tables without relations are hidden
+  (search still finds them).
+- While a diagram is open, the sidebar shows its **outline**: find a table, tables grouped around the most linked
+  ones (each group has a colour, also on the boxes), and the selected table with its relations.
 - Big databases (more than 120 linked tables) start in **focus mode**: pick one of the most linked tables or search;
   it is shown with the tables it links to, and *Show related tables* adds more. *Show all* is still there (slow).
-- Line ends show the relation type: crow's foot = many, bar = one, circle = optional (NULL allowed); labels say N:1 or 1:1.
+- **By name**: show only tables like `tbl_*` (prefix), `*_log` (suffix) or any part of the name. Common prefixes
+  and suffixes are offered on the start card; in the outline, type a pattern and click *Show only … matching tables*.
+  *Show related tables* on a table adds the tables it links to.
+- Lines are curved; the ends show the relation type: open circle = many (the foreign key side), filled circle = one.
 - **Guessed relations**: old schemas often have no foreign keys, so `customer_id` → `customers.id` and
-  `ds_person_id` → `ds_person.ds_person_id` are drawn as dashed lines (can be turned off).
-- Click a table: its neighbours stay bright and a side panel shows columns and relations. Double-click opens the data.
-- Select tables or lines (⇧-drag for several) and **Ask Claude**: ready-made questions or your own; the selected
-  tables, columns and relations go along as context. With a project folder, Claude can also read your models
-  and migrations.
+  `ds_person_id` → `ds_person.ds_person_id` are drawn as dashed lines (can be turned off). *Save* in the outline
+  makes one a virtual foreign key.
+- Hover or click a table: its relations and their columns light up, the rest fades. Double-click opens the data.
+- **Ask Claude** (outline button, or select tables or lines with ⇧-drag): ready-made questions or your own; the
+  selected tables, columns and relations go along as context. With a project folder, Claude can also read your
+  models and migrations.
 - **Schema changes**: *Mark as seen* saves a snapshot (the last 5 are kept). Later, new tables and columns show
   in green, dropped ones in red, changed ones in amber — on the diagram and in the sidebar.
 

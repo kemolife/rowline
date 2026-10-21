@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, History as HistoryIcon, Loader2, Sparkles } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { explainSqlError } from '../lib/sqlAssist';
 import { EXPORT_FORMATS, exportRows, forClaude, formatRows, guessTable, type ExportFormat } from '../lib/export';
 import type { Engine, QueryResult } from '../lib/types';
 import { cx, formatCount } from '../lib/ui';
@@ -80,7 +81,11 @@ export default function ResultPanel({
   const item = 'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-surface-3';
 
   if (!run) {
-    return running ? <CenteredState loading /> : <div className="flex flex-1 items-center justify-center text-[12.5px] text-ink-3">Results appear here. Every run is kept, so you can go back to it without running the query again.</div>;
+    return running ? (
+      <CenteredState loading />
+    ) : (
+      <div className="flex flex-1 items-center justify-center text-[12.5px] text-ink-3">Results appear here. Every run is kept, so you can go back to it without running the query again.</div>
+    );
   }
 
   return (
@@ -92,12 +97,20 @@ export default function ResultPanel({
             <ChevronLeft size={14} />
           </button>
           <div className="relative">
-            <button className={cx('flex h-6 items-center gap-1 rounded-md px-2 text-[12px] text-ink-2 hover:bg-surface-2', menu === 'runs' && 'bg-surface-2')} onClick={() => setMenu(menu === 'runs' ? null : 'runs')} data-testid="runs-button" title="All runs of this tab">
+            <button
+              className={cx('flex h-6 items-center gap-1 rounded-md px-2 text-[12px] text-ink-2 hover:bg-surface-2', menu === 'runs' && 'bg-surface-2')}
+              onClick={() => setMenu(menu === 'runs' ? null : 'runs')}
+              data-testid="runs-button"
+              title="All runs of this tab"
+            >
               <HistoryIcon size={12} /> Run {index + 1} of {runs.length}
               <ChevronDown size={11} />
             </button>
             {menu === 'runs' && (
-              <div className="fade-in absolute left-0 top-7 z-30 max-h-80 w-[560px] overflow-y-auto rounded-xl border border-line-strong bg-surface-2 p-1 text-[12px] shadow-[var(--shadow)]" data-testid="runs-menu">
+              <div
+                className="fade-in absolute left-0 top-7 z-30 max-h-80 w-[560px] overflow-y-auto rounded-xl border border-line-strong bg-surface-2 p-1 text-[12px] shadow-[var(--shadow)]"
+                data-testid="runs-menu"
+              >
                 {runs
                   .map((r, i) => ({ r, i }))
                   .reverse()
@@ -219,7 +232,15 @@ export default function ResultPanel({
       </div>
 
       {run.error ? (
-        <CenteredState error={run.error} />
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8">
+          <CenteredState error={run.error} />
+          {explainSqlError(run.error, run.sql) && (
+            <div className="-mt-6 max-w-xl rounded-xl border border-line bg-surface-2 px-4 py-3 text-[12.5px] text-ink-2" data-testid="error-hint">
+              <span className="font-semibold text-ink">Hint: </span>
+              {explainSqlError(run.error, run.sql)}
+            </div>
+          )}
+        </div>
       ) : !result ? (
         <div className="flex flex-1 items-center justify-center text-[12.5px] text-ink-3">No result.</div>
       ) : !hasRows ? (

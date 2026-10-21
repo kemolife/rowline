@@ -302,6 +302,7 @@ mod tests {
             file_path: Some("/tmp/x.sqlite".into()),
             claude_access: None,
             project_folder: None,
+            group: None,
         }
     }
 

@@ -7,9 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format as formatSql } from 'sql-formatter';
 import { api, confirmDialog, pickSavePath } from '../lib/api';
 import { setStatements, statementGutter, statementsField, toEditorStatements } from '../lib/statementGutter';
-import { joinSuggestions, lintStatement, tableRefs, updatesAllRows } from '../lib/sqlAssist';
+import { lintStatement, updatesAllRows } from '../lib/sqlAssist';
 import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
-import type { Completion, CompletionContext } from '@codemirror/autocomplete';
+import { acceptCompletion, autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete';
+import { completeSql, loadUsage, opensNextSuggestions, recordUse, type SuggestionKind } from '../lib/sqlComplete';
 import { useRelations } from '../store/schema';
 import type { HistoryEntry } from '../lib/types';
 import { MOD, cx, matchKey } from '../lib/ui';
@@ -52,7 +53,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   const maxRows = tab.maxRows ?? 5000;
   // relations for JOIN completion: read once the tab is opened (cached per database)
   const relations = useRelations(id, database, active);
-  const assist = useRef({ relations, schema: new Map<string, Set<string>>() });
+  const assist = useRef({ relations, schema: new Map<string, Set<string>>(), columns: new Map<string, string[]>() });
   assist.current.relations = relations;
   const [editorHeight, setEditorHeight] = useState(45); // percent
   const [schema, setSchema] = useState<Record<string, string[]>>({});
@@ -70,11 +71,15 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   }, [sql, tab.id, updateTab]);
 
   useEffect(() => {
-    api.schemaColumns(id, database).then(setSchema).catch(() => setSchema({}));
+    api
+      .schemaColumns(id, database)
+      .then(setSchema)
+      .catch(() => setSchema({}));
   }, [id, database]);
   // table → columns (lower case) for the warnings
   useEffect(() => {
     assist.current.schema = new Map(Object.entries(schema).map(([t, cols]) => [t.toLowerCase(), new Set(cols.map((c) => c.toLowerCase()))]));
+    assist.current.columns = new Map(Object.entries(schema));
   }, [schema]);
 
   useEffect(() => {
@@ -101,7 +106,18 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       let entry: Run;
       try {
         const res = await api.executeSql(id, database, text, maxRows || NO_LIMIT);
-        entry = { id: ++runSeq, sql: text, startedAt, elapsedMs: Date.now() - startedAt, results: res, error: null, current: Math.max(0, res.findIndex((r) => r.columns.length > 0)) };
+        entry = {
+          id: ++runSeq,
+          sql: text,
+          startedAt,
+          elapsedMs: Date.now() - startedAt,
+          results: res,
+          error: null,
+          current: Math.max(
+            0,
+            res.findIndex((r) => r.columns.length > 0),
+          ),
+        };
         if (res.some((r) => r.affectedRows != null && r.columns.length === 0)) refreshObjects();
       } catch (e) {
         entry = { id: ++runSeq, sql: text, startedAt, elapsedMs: Date.now() - startedAt, results: [], error: (e as Error).message, current: 0 };
@@ -245,28 +261,43 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
     return () => window.removeEventListener('keydown', onKey);
   }, [active]);
 
+  const completionUsage = useRef<Record<string, number> | null>(null);
+  const sqlSource = useCallback((ctx: CompletionContext) => {
+    const before = ctx.state.sliceDoc(Math.max(0, ctx.pos - 20000), ctx.pos);
+    const typed = /[\w$]*$/.exec(before)![0];
+    // pop up while typing a word, after `alias.`, after JOIN, or on Ctrl-Space
+    if (!ctx.explicit && !typed && !/\.\s*$/.test(before) && !/\bjoin\s+$/i.test(before)) return null;
+    completionUsage.current ??= loadUsage();
+    const usage = completionUsage.current;
+    const after = ctx.state.sliceDoc(ctx.pos, Math.min(ctx.state.doc.length, ctx.pos + 20000));
+    const res = completeSql(before, assist.current.columns, assist.current.relations, usage, after);
+    if (!res) return null;
+    const type: Record<SuggestionKind, string> = { keyword: 'keyword', table: 'class', column: 'property', function: 'function', join: 'class' };
+    const options: Completion[] = res.options.map((o, i) => ({
+      label: o.label,
+      detail: o.detail,
+      type: type[o.kind],
+      boost: 99 - Math.min(i, 198),
+      apply: (view, completion, from, to) => {
+        const insert = o.insert ?? o.label;
+        // `IN ()`, `COUNT()`: the cursor goes between the brackets
+        const cursor = insert.endsWith('()') ? from + insert.length - 1 : from + insert.length;
+        view.dispatch({ changes: { from, to, insert }, selection: { anchor: cursor }, userEvent: 'input.complete' });
+        recordUse(usage, completion.label);
+        // `LEFT JOIN`, `FROM`, `WHERE`…: the next thing is a name, so show the suggestions for it right away
+        if (o.kind === 'keyword' && opensNextSuggestions(o.label)) setTimeout(() => startCompletion(view), 0);
+      },
+    }));
+    return { from: ctx.pos - (before.length - res.from), options, filter: false };
+  }, []);
+
   const extensions = useMemo(
     () => [
-      sqlLang({ dialect: session.config.engine === 'mysql' ? MySQL : SQLite, schema, upperCaseKeywords: true }),
+      sqlLang({ dialect: session.config.engine === 'mysql' ? MySQL : SQLite, upperCaseKeywords: true }),
       EditorView.lineWrapping,
       statementGutter((stmt) => runTextRef.current(stmt.text)),
-      // JOIN completion: `JOIN ` offers tables related to the ones already in the statement, with the ON part
-      (session.config.engine === 'mysql' ? MySQL : SQLite).language.data.of({
-        autocomplete: (ctx: CompletionContext) => {
-          const m = ctx.matchBefore(/\bjoin\s+[\w$]*$/i);
-          if (!m) return null;
-          const word = /[\w$]*$/.exec(m.text)![0];
-          const stmt = ctx.state.field(statementsField).find((s) => ctx.pos >= s.from && ctx.pos <= s.to + 1);
-          const text = stmt ? ctx.state.sliceDoc(stmt.from, ctx.pos) : ctx.state.sliceDoc(0, ctx.pos);
-          const options: Completion[] = joinSuggestions(tableRefs(text), assist.current.relations).map((j, i) => ({
-            label: j.text,
-            detail: j.detail,
-            type: 'class',
-            boost: 99 - i,
-          }));
-          return options.length ? { from: ctx.pos - word.length, options, filter: true } : null;
-        },
-      }),
+      // completion like PhpStorm: what fits where the cursor is (statement words, tables, columns, JOIN … ON)
+      autocompletion({ override: [sqlSource], activateOnTyping: true, icons: true }),
       // warnings: UPDATE / DELETE without WHERE, unknown tables and columns
       lintGutter(),
       linter(
@@ -274,7 +305,19 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           const out: Diagnostic[] = [];
           for (const s of view.state.field(statementsField)) {
             const text = view.state.sliceDoc(s.from, s.to);
-            for (const i of lintStatement(text, assist.current.schema)) out.push({ from: s.from + i.from, to: s.from + i.to, severity: i.severity, message: i.message });
+            for (const i of lintStatement(text, assist.current.schema)) {
+              const from = s.from + i.from;
+              const to = s.from + i.to;
+              const fix = i.fix;
+              out.push({
+                from,
+                to,
+                severity: i.severity,
+                message: i.message,
+                // one click fixes it (e.g. `ds_request` → `r`)
+                actions: fix ? [{ name: fix.label, apply: (v, f, t) => v.dispatch({ changes: { from: f, to: t, insert: fix.insert } }) }] : undefined,
+              });
+            }
           }
           return out;
         },
@@ -282,6 +325,8 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       ),
       Prec.highest(
         keymap.of([
+          // Tab takes the highlighted suggestion (otherwise it indents as usual)
+          { key: 'Tab', run: acceptCompletion },
           { key: 'Mod-i', run: () => (beautifyRef.current(), true) },
           { key: 'Mod-Enter', run: () => (runRef.current('current'), true) },
           { key: 'Shift-Mod-Enter', run: () => (runRef.current('all'), true) },
@@ -291,7 +336,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         ]),
       ),
     ],
-    [session.config.engine, schema],
+    [session.config.engine, sqlSource],
   );
 
   const openHistory = async () => {
@@ -323,7 +368,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           extensions={extensions}
           onChange={setSql}
           placeholder={`SELECT * FROM … — ${MOD}↵ runs the statement at the cursor`}
-          basicSetup={{ foldGutter: false, highlightActiveLineGutter: true, autocompletion: true }}
+          basicSetup={{ foldGutter: false, highlightActiveLineGutter: true, autocompletion: false }}
         />
       </div>
 
@@ -337,7 +382,12 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
             <button className="btn btn-primary h-7 rounded-r-none" onClick={() => run('current')} data-testid="run-current" title={`Run the statement at the cursor, or the selection (${MOD}↵)`}>
               <Play size={13} className="fill-current" /> Run <span className="opacity-70">{MOD}↵</span>
             </button>
-            <button className="btn btn-primary h-7 rounded-l-none border-l-[color-mix(in_srgb,var(--accent-text)_25%,transparent)] px-1.5" onClick={() => setRunMenu(!runMenu)} aria-label="More run options" data-testid="run-menu">
+            <button
+              className="btn btn-primary h-7 rounded-l-none border-l-[color-mix(in_srgb,var(--accent-text)_25%,transparent)] px-1.5"
+              onClick={() => setRunMenu(!runMenu)}
+              aria-label="More run options"
+              data-testid="run-menu"
+            >
               <ChevronDown size={13} />
             </button>
             {runMenu && (

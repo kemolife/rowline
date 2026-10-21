@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { api, confirmDialog } from '../lib/api';
 import type { FilterRule } from '../lib/filters';
+import { useMemo } from 'react';
+import { effectiveProjects, insertGrouped, type ProjectInfo } from '../lib/projects';
 import type { ConnectionConfig, ConnectionInput, DbObject, ObjectKind, ServerInfo, SortSpec } from '../lib/types';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -123,12 +125,18 @@ export interface AppState {
   /** recently opened tables per connection and database, newest first */
   recent: Record<string, string[]>;
   togglePin: (cid: string, table: string) => void;
+  /** when each connection was last opened (ms), for "2 h ago" on the start screen */
+  lastUsed: Record<string, number>;
+  /** puts connections into a project (null: no project); saves each connection */
+  setProject: (ids: string[], project: string | null) => Promise<void>;
   /** `database`: run in this database instead of the selected one (Claude "Open in grid") */
   openQuery: (cid: string, sql?: string, opts?: QueryOpenOptions) => void;
   updateTab: (cid: string, tabId: string, patch: Partial<TableTab> | Partial<QueryTab> | Partial<DiagramTab>) => void;
   /** Opens the relation diagram of the selected database (one tab per database) */
   openDiagram: (cid: string, focus?: string) => void;
   closeTab: (cid: string, tabId: string) => Promise<void>;
+  /** Closes several tabs; asks once when some of them have unsaved changes */
+  closeTabs: (cid: string, tabIds: string[]) => Promise<void>;
   setActiveTab: (cid: string, tabId: string) => void;
   setDirty: (cid: string, tabId: string, count: number) => void;
   toggleSidebar: () => void;
@@ -188,6 +196,11 @@ export const useApp = create<AppState>((set, get) => {
     set({ workspaces: { ...get().workspaces, [cid]: { ...w, ...fn(w) } } });
   };
   const patchSession = (cid: string, fn: (s: Session) => Partial<Session>) => patchWs(cid, (w) => ({ session: { ...w.session, ...fn(w.session) } }));
+  /** project of a connection: the saved config (fresh after an edit), else the open session's copy */
+  const projectOf = (id: string) => {
+    const all = get().connections.length ? get().connections : Object.values(get().workspaces).map((w) => w.session.config);
+    return effectiveProjects(all).get(id)?.name ?? null;
+  };
 
   return {
     theme: readTheme(),
@@ -201,6 +214,7 @@ export const useApp = create<AppState>((set, get) => {
     rowPanelOpen: true,
     claudeOpen: readFlag('rowline.claudeOpen', false),
     pinned: readJson('rowline.pinned', {}),
+    lastUsed: readJson('rowline.lastUsed', {}),
     recent: readJson('rowline.recent', {}),
     editing: null,
     paletteOpen: false,
@@ -249,10 +263,12 @@ export const useApp = create<AppState>((set, get) => {
               dirtyTabs: {},
             },
           },
-          openOrder: [...get().openOrder.filter((o) => o !== id), id],
+          openOrder: insertGrouped(get().openOrder, id, (o) => projectOf(o)),
+          lastUsed: { ...get().lastUsed, [id]: Date.now() },
           activeConnectionId: id,
           launcherOpen: false,
         });
+        writeJson('rowline.lastUsed', get().lastUsed);
         if (config.engine === 'sqlite' || database) await get().refreshObjects(id);
       } catch (e) {
         get().toast((e as Error).message, 'error');
@@ -266,6 +282,8 @@ export const useApp = create<AppState>((set, get) => {
       if (!w) return;
       const old = w.session.config;
       patchSession(config.id, () => ({ config }));
+      // a new project: move it next to the other connections of that project
+      if ((old.group ?? null) !== (config.group ?? null) || old.name !== config.name) set({ openOrder: insertGrouped(get().openOrder, config.id, (o) => projectOf(o)) });
       if (!passwordChanged && !needsReconnect(old, config)) return;
       if (await confirmDialog(`Reconnect "${config.name}" now to use the new connection settings? Your tabs stay open.`)) {
         await get().reconnect(config.id);
@@ -427,6 +445,28 @@ export const useApp = create<AppState>((set, get) => {
 
     updateTab: (cid, id, patch) => patchWs(cid, (w) => ({ tabs: w.tabs.map((t) => (t.id === id ? ({ ...t, ...patch } as Tab) : t)) })),
 
+    closeTabs: async (cid, ids) => {
+      const w = get().workspaces[cid];
+      if (!w || !ids.length) return;
+      const closing = new Set(ids);
+      const dirty = ids.reduce((n, id) => n + (w.dirtyTabs[id] ?? 0), 0);
+      const dirtyTabs = ids.filter((id) => (w.dirtyTabs[id] ?? 0) > 0).length;
+      if (dirty > 0 && !(await confirmDialog(`Discard ${dirty} unsaved change${dirty > 1 ? 's' : ''} in ${dirtyTabs} tab${dirtyTabs > 1 ? 's' : ''}?`))) return;
+      patchWs(cid, (ws) => {
+        const rest = ws.tabs.filter((t) => !closing.has(t.id));
+        const dirtyLeft = Object.fromEntries(Object.entries(ws.dirtyTabs).filter(([id]) => !closing.has(id)));
+        let activeTabId = ws.activeTabId;
+        if (activeTabId && closing.has(activeTabId)) {
+          // the nearest tab that stays, to the left first
+          const idx = ws.tabs.findIndex((t) => t.id === activeTabId);
+          const left = ws.tabs.slice(0, idx).reverse().find((t) => !closing.has(t.id));
+          const right = ws.tabs.slice(idx + 1).find((t) => !closing.has(t.id));
+          activeTabId = (left ?? right)?.id ?? null;
+        }
+        return { tabs: rest, activeTabId, dirtyTabs: dirtyLeft };
+      });
+    },
+
     closeTab: async (cid, id) => {
       const w = get().workspaces[cid];
       if (!w) return;
@@ -439,6 +479,22 @@ export const useApp = create<AppState>((set, get) => {
         const activeTabId = ws.activeTabId === id ? rest[Math.min(idx, rest.length - 1)]?.id ?? null : ws.activeTabId;
         return { tabs: rest, activeTabId, dirtyTabs };
       });
+    },
+
+    setProject: async (ids, project) => {
+      const group = project?.trim() || null;
+      try {
+        for (const id of ids) {
+          const c = get().connections.find((x) => x.id === id);
+          if (!c || (c.group ?? null) === group) continue;
+          const saved = await api.saveConnection({ ...c, group, password: undefined });
+          patchSession(id, () => ({ config: saved }));
+        }
+        await get().loadConnections();
+        for (const id of ids) if (get().workspaces[id]) set({ openOrder: insertGrouped(get().openOrder, id, (o) => projectOf(o)) });
+      } catch (e) {
+        get().toast((e as Error).message, 'error');
+      }
     },
 
     togglePin: (cid, table) => {
@@ -528,3 +584,9 @@ useApp.subscribe((state, prev) => {
     }, 300);
   }
 });
+
+/** Projects of all saved connections: typed by the user, or guessed from names and databases */
+export function useProjects(): Map<string, ProjectInfo> {
+  const connections = useApp((s) => s.connections);
+  return useMemo(() => effectiveProjects(connections), [connections]);
+}
