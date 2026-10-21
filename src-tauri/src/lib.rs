@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod backup;
+pub mod cli;
 pub mod commands;
 pub mod drivers;
 pub mod error;
@@ -49,6 +50,10 @@ pub fn run() {
             let store = Store::new(dir.clone(), SecretStore::file(dir.join("secrets.json")))?;
             let state = Arc::new(AppState::new(store));
             tauri::async_runtime::block_on(claude::mcp::start(state.clone()))?;
+            // the `rowline` command; without it the app still works (e.g. a second Rowline is running)
+            if let Err(e) = tauri::async_runtime::block_on(cli::server::start(state.clone(), cli::socket_path())) {
+                eprintln!("rowline command unavailable: {e}");
+            }
             app.manage(state);
             Ok(())
         })

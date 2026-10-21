@@ -52,6 +52,10 @@ export const api = {
   testConnection: (input: ConnectionInput) => call<ServerInfo>('test_connection', { ...input }),
   connect: (id: string) => call<ServerInfo>('connect', { id }),
   disconnect: (id: string) => call<boolean>('disconnect', { id }),
+  /** the database the app shows; the `rowline` command uses it by default */
+  setActiveDatabase: (id: string, database: string | null) => call<boolean>('set_active_database', { id, database }),
+  cliStatus: () => call<{ installed: boolean; link: string | null; target: string | null; socket: string }>('cli_status'),
+  installCli: () => call<string>('install_cli'),
   listDatabases: (id: string) => call<string[]>('list_databases', { id }),
   listObjects: (id: string, database: string | null) => call<DbObject[]>('list_objects', { id, database }),
   schemaColumns: (id: string, database: string | null) => call<Record<string, string[]>>('schema_columns', { id, database }),

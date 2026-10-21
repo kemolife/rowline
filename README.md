@@ -123,6 +123,40 @@ Sidebar → **Diagram** → *Open relation diagram*.
 - **Schema changes**: *Mark as seen* saves a snapshot (the last 5 are kept). Later, new tables and columns show
   in green, dropped ones in red, changed ones in amber — on the diagram and in the sidebar.
 
+### Command line for agents (`rowline`)
+
+Let Claude Code (or any agent, script or terminal) check data through Rowline, read-only, without ever
+seeing a password. Typical use: the agent reads the code for a bug ticket, writes a SELECT, runs it itself.
+
+Install once: **Command line** at the bottom of the start screen (or *Install the rowline command* in `⌘K`).
+It links `~/.local/bin/rowline` to the app; add `~/.local/bin` to your `PATH` if it is not there.
+
+```bash
+rowline connections                                   # open connections: name, environment, engine, database
+rowline tables --conn "prod core"                     # tables with row estimates
+rowline describe orders --conn "prod core"            # columns, indexes, foreign keys
+rowline query --conn "prod core" "SELECT id, status FROM orders WHERE id = 42"
+rowline query -f table -n 20 "SELECT …"               # json (default), table or csv; --db to pick a database
+```
+
+- Talks to the running app over a Unix socket that only your user can open
+  (`~/Library/Application Support/app.rowline.desktop/rowline.sock`). Rowline must be running.
+- Only connections that are **open in the app** can be used; close one and the agent loses it.
+  A unique part of the name is enough, and `--conn` is optional with one open connection.
+- The database is the one selected in the app, unless `--db` says otherwise.
+- **Read-only, on every connection**: one SELECT / SHOW / DESCRIBE / EXPLAIN / WITH … SELECT statement.
+  Writes, several statements, `INTO OUTFILE`, `FOR UPDATE`, `LOAD_FILE` and the like are refused before they
+  reach the database (exit code 2), and the query runs in a read-only transaction with a 30 s limit.
+- At most 200 rows by default (`--limit`, up to 1,000); long text values are cut to 2 KB.
+- Every query, blocked ones too, shows up in the connection's **History** with a *CLI* mark.
+- Exit codes: 0 ok, 1 error, 2 refused, 3 Rowline is not running. `rowline help` explains it all.
+
+To tell Claude Code about it, add to your project's `CLAUDE.md`:
+
+```
+To check data in the database, use the `rowline` command (read-only; run `rowline help` first).
+```
+
 ### Claude panel (`⌘L`)
 
 Ask questions about your data in plain language. Rowline uses the Claude Code you already have installed
@@ -170,6 +204,7 @@ Everything stays on your Mac, in `~/Library/Application Support/app.rowline.desk
 | `history.json` | Query history |
 | `virtual_keys.json` | Virtual foreign keys |
 | `schema-snapshots/` | Schema snapshots for the relation diagram's change view |
+| `rowline.sock` | Socket for the `rowline` command while the app runs (`0600`) |
 
 ## Develop
 

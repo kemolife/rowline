@@ -1,4 +1,5 @@
-import { Code2, Database, Eye, LogOut, Moon, PanelLeft, RefreshCw, Search, Table2 } from 'lucide-react';
+import { installCli } from '../lib/cliInstall';
+import { Code2, Database, Eye, LogOut, Moon, PanelLeft, RefreshCw, Search, Table2, Terminal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MOD, cx } from '../lib/ui';
@@ -56,6 +57,7 @@ export default function CommandPalette() {
         icon: <Moon size={14} />,
         run: () => s.setTheme(s.theme === 'system' ? 'light' : s.theme === 'light' ? 'dark' : 'system'),
       },
+      { id: 'a:cli', label: 'Install the rowline command (read-only queries for agents)', icon: <Terminal size={14} />, run: installCli },
       { id: 'a:disconnect', label: 'Disconnect', icon: <LogOut size={14} />, run: () => s.disconnect(cid) },
       ...session.databases
         .filter((d) => d !== session.database && session.config.engine === 'mysql')

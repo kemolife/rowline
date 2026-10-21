@@ -19,7 +19,7 @@ export default function Toasts() {
           ) : (
             <Info size={16} className="mt-px shrink-0 text-ink-2" />
           )}
-          <div className="selectable min-w-0 flex-1 break-words text-ink">{t.message}</div>
+          <div className="selectable min-w-0 flex-1 whitespace-pre-line break-words text-ink">{t.message}</div>
           <button className="icon-btn -m-1 h-6 w-6" onClick={() => dismiss(t.id)} aria-label="Dismiss">
             <X size={14} />
           </button>

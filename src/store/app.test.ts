@@ -7,6 +7,7 @@ vi.mock('../lib/api', () => ({
     listConnections: vi.fn(async () => []),
     connect: vi.fn(async () => ({ version: 'v', currentDatabase: 'shop' })),
     disconnect: vi.fn(async () => true),
+    setActiveDatabase: vi.fn(async () => true),
     deleteConnection: vi.fn(async () => true),
     saveConnection: vi.fn(async (c: unknown) => c),
     listDatabases: vi.fn(async () => ['shop']),

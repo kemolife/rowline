@@ -7,9 +7,15 @@ use super::IdArgs;
 use crate::manager::Session;
 use crate::model::*;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveDatabaseArgs {
+    id: String,
+    #[serde(default)]
+    database: Option<String>,
+}
 
-
-pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "connect", "disconnect"];
+pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "connect", "disconnect", "set_active_database"];
 
 pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
     match command {
@@ -39,6 +45,12 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "disconnect" => {
             let a: IdArgs = parse(args)?;
             state.manager.remove(&a.id).await;
+            ok(true)
+        }
+        // the database the app shows; the `rowline` command uses it when no --db is given
+        "set_active_database" => {
+            let a: ActiveDatabaseArgs = parse(args)?;
+            state.manager.set_database(&a.id, a.database.as_deref());
             ok(true)
         }
         other => Err(super::unknown(other)),

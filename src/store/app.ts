@@ -252,6 +252,7 @@ export const useApp = create<AppState>((set, get) => {
         const info = await api.connect(id);
         const databases = config.engine === 'mysql' ? await api.listDatabases(id) : ['main'];
         const database = config.engine === 'mysql' ? config.database || info.currentDatabase || null : null;
+        api.setActiveDatabase(id, database).catch(() => {});
         const restored = loadSavedTabs(id);
         set({
           workspaces: {
@@ -365,6 +366,7 @@ export const useApp = create<AppState>((set, get) => {
       const w = get().workspaces[cid];
       if (!w || w.session.database === db) return;
       patchSession(cid, () => ({ database: db, objects: [] }));
+      api.setActiveDatabase(cid, db).catch(() => {});
       await get().refreshObjects(cid);
     },
 
@@ -530,7 +532,8 @@ export const useApp = create<AppState>((set, get) => {
     toast: (message, kind = 'info') => {
       const id = ++toastId;
       set({ toasts: [...get().toasts, { id, kind, message }] });
-      setTimeout(() => get().dismissToast(id), kind === 'error' ? 7000 : 3500);
+      // longer messages (several lines, e.g. setup steps) stay longer
+      setTimeout(() => get().dismissToast(id), message.includes('\n') ? 12000 : kind === 'error' ? 7000 : 3500);
     },
     dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   };

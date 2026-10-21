@@ -154,6 +154,12 @@ export interface HistoryEntry {
   executedAt: string;
   elapsedMs: number;
   ok: boolean;
+  /** "cli": an agent ran it with the `rowline` command */
+  source?: 'cli';
+  /** why it failed or was blocked (CLI) */
+  error?: string;
+  /** rows returned (CLI) */
+  rows?: number;
 }
 
 /** Production defaults to schema only, every other environment to data (mirrors ConnectionConfig::claude_access). */

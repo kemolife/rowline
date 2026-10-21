@@ -151,9 +151,29 @@ fn expand_home(path: &str) -> String {
 #[derive(Default)]
 pub struct Manager {
     sessions: RwLock<HashMap<String, Arc<Session>>>,
+    /// the database each open connection uses in the app (MySQL), for the `rowline` command
+    databases: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl Manager {
+    /// Ids of the open connections
+    pub async fn open_ids(&self) -> Vec<String> {
+        self.sessions.read().await.keys().cloned().collect()
+    }
+
+    pub fn set_database(&self, id: &str, database: Option<&str>) {
+        let mut m = self.databases.lock().unwrap_or_else(|e| e.into_inner());
+        match database.filter(|d| !d.is_empty()) {
+            Some(d) => m.insert(id.to_string(), d.to_string()),
+            None => m.remove(id),
+        };
+    }
+
+    /// The database selected in the app, if it told us
+    pub fn database(&self, id: &str) -> Option<String> {
+        self.databases.lock().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+    }
+
     pub async fn insert(&self, id: &str, session: Session) {
         let old = self.sessions.write().await.insert(id.to_string(), Arc::new(session));
         drop(old);
@@ -165,5 +185,6 @@ impl Manager {
 
     pub async fn remove(&self, id: &str) {
         self.sessions.write().await.remove(id);
+        self.set_database(id, None);
     }
 }

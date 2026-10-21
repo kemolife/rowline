@@ -114,6 +114,9 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
                 executed_at: chrono::Utc::now(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 ok: res.is_ok(),
+                source: None,
+                error: None,
+                rows: None,
             });
             ok(res?)
         }
