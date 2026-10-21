@@ -4,7 +4,7 @@ import { changeLines, type TableView } from './schemaDiff';
 import type { Engine } from './types';
 
 /** Size of a table box on the diagram */
-export const HEAD_H = 36;
+export const HEAD_H = 34;
 export const ROW_H = 22;
 export const NODE_W_MIN = 180;
 export const NODE_W_MAX = 340;
@@ -27,7 +27,7 @@ export function nodeSize(t: TableView, related?: ReadonlySet<string>): { width: 
   const longest = Math.max(t.name.length + 8, ...cols.map((c) => c.name.length + Math.min(c.dataType.length, 18) + 6));
   return {
     width: Math.min(NODE_W_MAX, Math.max(NODE_W_MIN, Math.round(longest * 7.2 + 24))),
-    height: HEAD_H + cols.length * ROW_H + (hidden ? ROW_H : 0) + 6,
+    height: HEAD_H + cols.length * ROW_H + (hidden ? ROW_H : 0) + 2,
   };
 }
 
@@ -303,5 +303,99 @@ export function hubTables(neighbours: Map<string, Set<string>>, count = 12): { n
   return [...neighbours.entries()]
     .map(([name, s]) => ({ name, links: s.size }))
     .sort((a, b) => b.links - a.links || a.name.localeCompare(b.name))
+    .slice(0, count);
+}
+
+/** A group of tables in the diagram outline: a well-linked table with the small tables around it */
+export interface DiagramGroup {
+  /** the table the group is named after */
+  hub: string | null;
+  tables: string[];
+}
+
+/**
+ * Groups for the outline. Tables with 3+ links start a group (most linked first) and take their
+ * neighbours with fewer than 3 links. Linked groups of one join together; a group still of one joins
+ * the neighbour group it has the most links to.
+ * Tables without links end in a last group with `hub: null`.
+ */
+export function groupTables(names: string[], neighbours: Map<string, Set<string>>): DiagramGroup[] {
+  const shown = new Set(names);
+  const near = (n: string) => [...(neighbours.get(n) ?? [])].filter((x) => shown.has(x) && x !== n);
+  const degree = new Map(names.map((n) => [n, near(n).length]));
+  const order = [...names].sort((a, b) => degree.get(b)! - degree.get(a)! || a.localeCompare(b));
+  const groupOf = new Map<string, string>();
+  for (const t of order) {
+    if (groupOf.has(t) || degree.get(t)! < 3) continue;
+    groupOf.set(t, t);
+    for (const n of near(t)) if (!groupOf.has(n) && degree.get(n)! < 3) groupOf.set(n, t);
+  }
+  // small tables not next to a group: with their best-linked neighbour
+  for (const t of order) {
+    if (groupOf.has(t) || !degree.get(t)) continue;
+    const best = near(t).sort((a, b) => degree.get(b)! - degree.get(a)!)[0];
+    groupOf.set(t, groupOf.get(best) ?? best);
+    if (!groupOf.has(best)) groupOf.set(best, best);
+  }
+  const members = new Map<string, string[]>();
+  for (const t of order) if (groupOf.has(t)) (members.get(groupOf.get(t)!) ?? members.set(groupOf.get(t)!, []).get(groupOf.get(t)!)!).push(t);
+  // linked hubs that took no tables (company, company_group, company_type) form one group together
+  for (const [hub, list] of [...members]) {
+    if (list.length !== 1 || !members.has(hub)) continue;
+    for (const n of near(hub)) {
+      if (members.get(n)?.length !== 1 || n === hub) continue;
+      list.push(n);
+      members.delete(n);
+      groupOf.set(n, hub);
+    }
+  }
+  // a hub still alone joins the group it has the most links to (ties: the bigger hub)
+  for (const [hub, list] of [...members]) {
+    if (list.length !== 1) continue;
+    const votes = new Map<string, number>();
+    for (const n of near(hub)) {
+      const g = groupOf.get(n);
+      if (g && g !== hub) votes.set(g, (votes.get(g) ?? 0) + 1);
+    }
+    const target = [...votes].sort((a, b) => b[1] - a[1] || degree.get(b[0])! - degree.get(a[0])!)[0]?.[0];
+    if (!target) continue;
+    members.get(target)!.push(hub);
+    members.delete(hub);
+    groupOf.set(hub, target);
+  }
+  const groups: DiagramGroup[] = [...members].map(([hub, tables]) => ({ hub, tables: [hub, ...tables.filter((t) => t !== hub).sort()] }));
+  groups.sort((a, b) => b.tables.length - a.tables.length || a.hub!.localeCompare(b.hub!));
+  const lonely = names.filter((n) => !groupOf.has(n)).sort();
+  if (lonely.length) groups.push({ hub: null, tables: lonely });
+  return groups;
+}
+
+/**
+ * Table name filter: `tbl_*`, `*_log`, `agenda*event`. Without `*` it matches names that contain the text.
+ * Case does not matter.
+ */
+export function nameMatcher(pattern: string): (name: string) => boolean {
+  const p = pattern.trim().toLowerCase();
+  if (!p) return () => true;
+  if (!p.includes('*')) return (n) => n.toLowerCase().includes(p);
+  const re = new RegExp(`^${p.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+  return (n) => re.test(n.toLowerCase());
+}
+
+/**
+ * Common name parts as filters: `tbl_*` (prefix) and `*_log` (suffix) used by at least `min` tables,
+ * most used first. A part every table has says nothing and is left out.
+ */
+export function nameAffixes(names: string[], min = 3, count = 12): { pattern: string; tables: number }[] {
+  const counts = new Map<string, number>();
+  for (const n of names) {
+    const parts = n.toLowerCase().split('_');
+    if (parts.length < 2 || !parts[0] || !parts[parts.length - 1]) continue;
+    for (const key of new Set([`${parts[0]}_*`, `*_${parts[parts.length - 1]}`])) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts]
+    .filter(([, c]) => c >= min && c < names.length)
+    .map(([pattern, tables]) => ({ pattern, tables }))
+    .sort((a, b) => b.tables - a.tables || a.pattern.localeCompare(b.pattern))
     .slice(0, count);
 }

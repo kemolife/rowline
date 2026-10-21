@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diagramPrompt, focusedTables, wrapTallLayers, hubTables, kindLabel, layout, neighbourMap, nodeSize, presetQuestions, relationsOf, visibleColumns, type Relation } from './diagram';
+import { diagramPrompt, focusedTables, groupTables, nameAffixes, nameMatcher, wrapTallLayers, hubTables, kindLabel, layout, neighbourMap, nodeSize, presetQuestions, relationsOf, visibleColumns, type Relation } from './diagram';
 import { diffSchema, type SchemaTable } from './schemaDiff';
 
 const col = (name: string, dataType = 'int', primaryKey = false) => ({ name, dataType, nullable: true, defaultValue: null, primaryKey, autoIncrement: false, comment: null });
@@ -120,5 +120,69 @@ describe('diagram', () => {
     // a few boxes spread over a tall area are packed together
     const spread = wrapTallLayers([0, 3000, 6000].map((y, i) => ({ id: `s${i}`, x: 0, y, width: 200, height: 80 })));
     expect(Math.max(...Object.values(spread).map((p) => p.y))).toBeLessThan(300);
+  });
+
+  it('groups tables around well-linked tables for the outline', () => {
+    const rel = (from: string, to: string): Relation => ({ id: `${from}-${to}`, from, fromColumns: ['x'], to, toColumns: ['id'], change: null, kind: 'many-to-one', optional: true, guessed: false });
+    const rels = [
+      ...['quote_field', 'material_field', 'history_log', 'price_rule', 'product_link'].map((t) => rel(t, 'company_product')),
+      rel('company_product', 'company'),
+      rel('company_product', 'client'),
+      rel('quote_field', 'client'),
+      rel('client', 'company'),
+      rel('company', 'company_group'),
+      rel('company', 'company_type'),
+      rel('company_group', 'company_type'),
+      rel('setitem', 'company'),
+      rel('setitem', 'client'),
+    ];
+    const names = [...new Set(rels.flatMap((r) => [r.from, r.to])), 'lonely'];
+    const groups = groupTables(names, neighbourMap(rels));
+    expect(groups[0].hub).toBe('company_product');
+    expect(groups[0].tables).toContain('material_field');
+    expect(groups[0].tables).not.toContain('company');
+    const company = groups.find((g) => g.hub === 'company')!;
+    expect(company.tables).toEqual(expect.arrayContaining(['company_group', 'company_type']));
+    expect(groups[groups.length - 1]).toEqual({ hub: null, tables: ['lonely'] });
+    // every table in exactly one group
+    expect(groups.flatMap((g) => g.tables).sort()).toEqual([...names].sort());
+  });
+
+  it('keeps well-linked tables next to a big hub in their own group', () => {
+    const rel = (from: string, to: string): Relation => ({ id: `${from}-${to}`, from, fromColumns: ['x'], to, toColumns: ['id'], change: null, kind: 'many-to-one', optional: true, guessed: false });
+    // the hub links to everything, and company / client / company_group / company_type also to each other
+    const rels = [
+      ...['a', 'b', 'c', 'd', 'company', 'client', 'company_group', 'company_type'].map((t) => rel(t, 'product')),
+      rel('client', 'company'),
+      rel('company', 'company_group'),
+      rel('company', 'company_type'),
+      rel('company_group', 'company_type'),
+    ];
+    const names = [...new Set(rels.flatMap((r) => [r.from, r.to]))];
+    const groups = groupTables(names, neighbourMap(rels));
+    expect(groups.map((g) => g.hub)).toEqual(['product', 'company']);
+    expect(groups[1].tables).toEqual(['company', 'company_group', 'company_type']);
+  });
+
+  it('filters tables by name: prefix, suffix, wildcard or plain text', () => {
+    const names = ['tbl_client', 'tbl_order', 'client', 'agenda_event', 'agenda_event_log', 'audit_log', 'TBL_Big'];
+    const pick = (p: string) => names.filter(nameMatcher(p));
+    expect(pick('tbl_*')).toEqual(['tbl_client', 'tbl_order', 'TBL_Big']);
+    expect(pick('*_log')).toEqual(['agenda_event_log', 'audit_log']);
+    expect(pick('agenda*event')).toEqual(['agenda_event']);
+    expect(pick('client')).toEqual(['tbl_client', 'client']);
+    expect(pick('  ')).toEqual(names);
+    // regex characters are plain text
+    expect(['a.b', 'axb'].filter(nameMatcher('a.b'))).toEqual(['a.b']);
+    expect(['a.b_x', 'axb_x'].filter(nameMatcher('a.b*'))).toEqual(['a.b_x']);
+  });
+
+  it('suggests common prefixes and suffixes as name filters', () => {
+    const names = ['tbl_a', 'tbl_b', 'tbl_c_log', 'ds_x_log', 'ds_y_log', 'client', 'ds_z'];
+    expect(nameAffixes(names)).toEqual([
+      { pattern: '*_log', tables: 3 },
+      { pattern: 'ds_*', tables: 3 },
+      { pattern: 'tbl_*', tables: 3 },
+    ]);
   });
 });

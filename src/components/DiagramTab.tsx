@@ -1,38 +1,45 @@
 import {
   Background,
   BackgroundVariant,
-  Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useStore,
   type Edge,
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Check, FolderOpen, Loader2, Maximize, RefreshCw, Search, Send, Sparkles, Table2, X } from 'lucide-react';
+import { FolderOpen, Loader2, Maximize, Minus, Plus, RefreshCw, Send, Sparkles, Table2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { diagramPrompt, focusedTables, hubTables, kindLabel, layout, neighbourMap, nodeSize, presetQuestions, relationsOf, visibleColumns, type Relation } from '../lib/diagram';
+import { diagramPrompt, focusedTables, groupTables, hubTables, layout, nameAffixes, nameMatcher, neighbourMap, nodeSize, presetQuestions, relationsOf, visibleColumns, type Relation } from '../lib/diagram';
 import { diffSchema, hasChanges, summaryText, type TableView } from '../lib/schemaDiff';
 import { cx, formatCount } from '../lib/ui';
 import { tableKey, useApp, type DiagramTab as DiagramTabType } from '../store/app';
 import { useChat } from '../store/chat';
+import { useDiagramView, type DiagramActions } from '../store/diagramView';
 import { schemaWithKeys } from '../lib/virtualKeys';
 import { emptySchema, useSchema, useVirtualKeys } from '../store/schema';
 import { useConnectionId, useWs, useWsActions } from '../store/workspace';
 import { CenteredState } from './DataTab';
-import DiagramTableNode, { type TableNodeType } from './DiagramTableNode';
+import DiagramTableNode, { COMPACT_ZOOM, type TableNodeType } from './DiagramTableNode';
 
 const nodeTypes: NodeTypes = { table: DiagramTableNode };
 /** more linked tables than this: start in focus mode */
 const FOCUS_FROM = 120;
-const TONE = { base: 'var(--text-3)', sel: 'var(--sel-strong)', add: 'var(--success)', rem: 'var(--danger)' } as const;
+const TONE = { base: 'var(--text-3)', sel: 'var(--accent)', add: 'var(--success)', rem: 'var(--danger)' } as const;
+type Tone = keyof typeof TONE;
+/** group colours in the outline and on the boxes */
+const GROUP_COLORS = ['oklch(0.66 0.13 45)', 'oklch(0.6 0.1 230)', 'oklch(0.6 0.1 150)', 'oklch(0.62 0.12 300)', 'oklch(0.7 0.12 85)', 'oklch(0.62 0.1 190)', 'oklch(0.6 0.14 0)', 'oklch(0.58 0.07 260)'];
+export const OTHER_COLOR = 'var(--text-3)';
+const HINT_KEY = 'rowline.diagramHint';
 
 /**
- * Line ends that show the relation type (drawn as at the end of a line, the table to the right):
- * many = crow's foot, one = bar, zone = zero or one (circle and bar, the column can be NULL).
+ * Line ends that show the relation type: an open circle at the "many" end (the foreign key side),
+ * a filled one at the "one" end.
  */
 function RelationMarkers() {
   return (
@@ -40,15 +47,11 @@ function RelationMarkers() {
       <defs>
         {Object.entries(TONE).map(([tone, color]) => (
           <g key={tone}>
-            <marker id={`rl-many-${tone}`} viewBox="0 0 20 20" refX="19" refY="10" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
-              <path d="M7 10 L19 3 M7 10 L19 10 M7 10 L19 17 M5 4 L5 16" fill="none" style={{ stroke: color }} strokeWidth="1.5" />
+            <marker id={`rl-many-${tone}`} viewBox="0 0 10 10" refX="5" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse">
+              <circle cx="5" cy="5" r="3.4" fill="var(--surface)" style={{ stroke: color }} strokeWidth="1.5" />
             </marker>
-            <marker id={`rl-one-${tone}`} viewBox="0 0 20 20" refX="19" refY="10" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
-              <path d="M11 3 L11 17 M15 3 L15 17" fill="none" style={{ stroke: color }} strokeWidth="1.5" />
-            </marker>
-            <marker id={`rl-zone-${tone}`} viewBox="0 0 20 20" refX="19" refY="10" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
-              <circle cx="7" cy="10" r="3.5" fill="var(--surface)" style={{ stroke: color }} strokeWidth="1.5" />
-              <path d="M15 3 L15 17" fill="none" style={{ stroke: color }} strokeWidth="1.5" />
+            <marker id={`rl-one-${tone}`} viewBox="0 0 10 10" refX="5" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse">
+              <circle cx="5" cy="5" r="3.4" style={{ fill: color }} />
             </marker>
           </g>
         ))}
@@ -75,6 +78,11 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
   const key = tableKey(cid, database);
   const entry = useSchema((s) => s.entries[key]) ?? emptySchema;
   const flow = useReactFlow<TableNodeType, Edge>();
+  const compact = useStore((s) => s.transform[2] < COMPACT_ZOOM);
+  const hover = useDiagramView((s) => s.hover[tab.id] ?? null);
+  const query = useDiagramView((s) => s.query[tab.id] ?? '')
+    .trim()
+    .toLowerCase();
 
   const [showChanges, setShowChanges] = useState(true);
   /** also draw relations guessed from column names (many old schemas have no foreign keys) */
@@ -87,7 +95,18 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
   const [roots, setRoots] = useState<string[]>([]);
   /** big database, but the user asked for everything */
   const [showAll, setShowAll] = useState(false);
-  const [search, setSearch] = useState('');
+  /** only tables whose name matches (`tbl_*`, `*_log`), plus the tables chosen in focus mode */
+  const [namePattern, setNamePattern] = useState<string | null>(null);
+  const [patternDraft, setPatternDraft] = useState('');
+  /** "Ask Claude" opened for the selected table */
+  const [askOpen, setAskOpen] = useState(false);
+  const [hint, setHint] = useState(() => {
+    try {
+      return localStorage.getItem(HINT_KEY) !== 'off';
+    } catch {
+      return true;
+    }
+  });
   const [laying, setLaying] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<TableNodeType>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -124,12 +143,28 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
   // big databases start in focus mode
   const big = candidates.length > FOCUS_FROM && !showAll;
   const shownTables = useMemo(() => {
-    if (!big) return candidates;
+    const named = namePattern ? nameMatcher(namePattern) : null;
+    if (!big && !named) return candidates;
     const focus = focusedTables(roots, links);
-    return candidates.filter((t) => focus.has(t.name) || forced.has(t.name));
-  }, [big, candidates, roots, links, forced]);
+    return candidates.filter((t) => focus.has(t.name) || forced.has(t.name) || named?.(t.name));
+  }, [big, candidates, roots, links, forced, namePattern]);
+  const affixes = useMemo(() => (big ? nameAffixes(candidates.map((t) => t.name)) : []), [big, candidates]);
+  // a new name filter starts a new view: tables added before are dropped
+  const filterByName = useCallback((p: string | null) => {
+    setNamePattern(p?.trim() || null);
+    setPatternDraft('');
+    setRoots([]);
+    setForced(new Set());
+  }, []);
   const hubs = useMemo(() => (big ? hubTables(links) : []), [big, links]);
   const addRoot = useCallback((name: string) => setRoots((r) => (r.includes(name) ? r : [...r, name])), []);
+
+  const groups = useMemo(() => groupTables(shownTables.map((t) => t.name), links), [shownTables, links]);
+  const colorOf = useMemo(() => {
+    const m = new Map<string, string>();
+    groups.forEach((g, i) => g.tables.forEach((t) => m.set(t, g.hub ? GROUP_COLORS[i % GROUP_COLORS.length] : OTHER_COLOR)));
+    return m;
+  }, [groups]);
 
   // layout whenever the shown tables change
   useEffect(() => {
@@ -153,7 +188,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
             type: 'table',
             position: pos[t.name] ?? { x: 0, y: 0 },
             style: { width: size.width },
-            data: { table: t, columns, dim: false, related: false },
+            data: { table: t, columns, color: OTHER_COLOR, dim: false, focus: false, active: [] },
           })),
         );
         requestAnimationFrame(() => flow.fitView({ padding: 0.12, maxZoom: 1 }));
@@ -164,49 +199,29 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
 
   useEffect(() => {
     const shown = new Set(shownTables.map((t) => t.name));
+    // compact boxes have no column rows: lines start and end at the table name
     const visible = (table: string, col: string) => {
       const t = byName.get(table);
-      return !!t && visibleColumns(t, relatedCols.get(table)).some((c) => c.name === col);
+      return !compact && !!t && visibleColumns(t, relatedCols.get(table)).some((c) => c.name === col);
     };
-    setEdges(
-      relations
+    setEdges((prev) => {
+      const wasSelected = new Set(prev.filter((e) => e.selected).map((e) => e.id));
+      return relations
         .filter((r) => shown.has(r.from) && shown.has(r.to))
         .map((r) => {
-          const tone = r.change === 'added' ? 'add' : r.change === 'removed' ? 'rem' : 'base';
+          const tone: Tone = r.change === 'added' ? 'add' : r.change === 'removed' ? 'rem' : 'base';
           return {
             id: r.id,
             source: r.from,
             target: r.to,
             sourceHandle: r.fromColumns.length === 1 && visible(r.from, r.fromColumns[0]) ? `${r.fromColumns[0]}-out` : 'table-out',
             targetHandle: r.toColumns.length === 1 && visible(r.to, r.toColumns[0]) ? `${r.toColumns[0]}-in` : 'table-in',
-            type: 'smoothstep',
-            // relation type at the ends: crow's foot = many, bar = one, circle = optional (the column can be NULL)
-            markerStart: `rl-${r.kind === 'one-to-one' ? 'one' : 'many'}-${tone}`,
-            markerEnd: `rl-${r.optional ? 'zone' : 'one'}-${tone}`,
-            label: `${kindLabel(r)}${r.guessed ? ' · guessed' : r.virtual ? ' · virtual' : ''}`,
-            labelStyle: { fontSize: 10, fill: 'var(--text-3)' },
-            labelBgStyle: { fill: 'var(--surface)' },
-            labelBgPadding: [4, 2] as [number, number],
-            style: { stroke: TONE[tone], strokeWidth: 1.5, strokeDasharray: r.change === 'removed' || r.guessed ? '5 4' : r.virtual ? '1.5 3' : undefined },
+            selected: wasSelected.has(r.id),
             data: { relation: r, tone },
           };
-        }),
-    );
-  }, [relations, shownTables, byName, relatedCols, setEdges]);
-
-  // a table to show (from the sidebar or a "show on diagram" link)
-  useEffect(() => {
-    if (!tab.focus || laying) return;
-    if (!nodes.some((n) => n.id === tab.focus)) {
-      // not on the diagram yet: show it (with its neighbours in focus mode); this runs again after the layout
-      if (big) addRoot(tab.focus);
-      else setForced((f) => (f.has(tab.focus!) ? f : new Set(f).add(tab.focus!)));
-      return;
-    }
-    focusTable(tab.focus);
-    updateTab(tab.id, { focus: undefined });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.focus, laying, nodes.length, big]);
+        });
+    });
+  }, [relations, shownTables, byName, relatedCols, setEdges, compact]);
 
   const focusTable = useCallback(
     (name: string) => {
@@ -222,6 +237,20 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
     [flow, setNodes, setEdges, updateTab, tab.id],
   );
 
+  // a table to show (from the sidebar or a "show on diagram" link)
+  useEffect(() => {
+    if (!tab.focus || laying) return;
+    if (!nodes.some((n) => n.id === tab.focus)) {
+      // not on the diagram yet: show it (with its neighbours in focus mode); this runs again after the layout
+      if (big) addRoot(tab.focus);
+      else setForced((f) => (f.has(tab.focus!) ? f : new Set(f).add(tab.focus!)));
+      return;
+    }
+    focusTable(tab.focus);
+    updateTab(tab.id, { focus: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.focus, laying, nodes.length, big]);
+
   const selectedNodes = nodes.filter((n) => n.selected);
   const selectedEdges = edges.filter((e) => e.selected);
   const selectedNames = useMemo(() => {
@@ -233,114 +262,170 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
     return s;
   }, [selectedNodes, selectedEdges]);
 
-  // one selected table: its neighbours stay bright, the rest fades
+  // one selected table is "pinned": the outline shows it, its relations stay bright
   const single = selectedNodes.length === 1 && !selectedEdges.length ? selectedNodes[0].id : null;
-  const neighbours = useMemo(() => {
-    if (!single) return null;
-    const s = new Set<string>([single]);
-    for (const r of relations) {
-      if (r.from === single) s.add(r.to);
-      if (r.to === single) s.add(r.from);
+  useEffect(() => setAskOpen(false), [single]);
+  // the table under the mouse wins over the selected one
+  const focus = hover && byName.has(hover) ? hover : single;
+  const focusRels = useMemo(() => (focus ? relations.filter((r) => r.from === focus || r.to === focus) : []), [focus, relations]);
+  const neighbours = useMemo(() => (focus ? new Set([focus, ...focusRels.flatMap((r) => [r.from, r.to])]) : null), [focus, focusRels]);
+
+  const queryMatch = useMemo(() => nameMatcher(query), [query]);
+  // node objects are reused while their look stays the same, so hovering does not redraw every box
+  const nodeCache = useRef(new Map<string, { key: string; base: TableNodeType; out: TableNodeType }>());
+  const shownNodes = useMemo(() => {
+    const active = new Map<string, string[]>();
+    const add = (t: string, cols: string[]) => active.set(t, [...(active.get(t) ?? []), ...cols]);
+    for (const r of focusRels) {
+      add(r.from, r.fromColumns);
+      add(r.to, r.toColumns);
     }
-    return s;
-  }, [single, relations]);
-  const shownNodes = useMemo(
-    () => nodes.map((n) => (neighbours ? { ...n, data: { ...n.data, dim: !neighbours.has(n.id), related: neighbours.has(n.id) && n.id !== single } } : n)),
-    [nodes, neighbours, single],
-  );
+    const cache = nodeCache.current;
+    const next = new Map<string, { key: string; base: TableNodeType; out: TableNodeType }>();
+    const out = nodes.map((n) => {
+      const color = colorOf.get(n.id) ?? OTHER_COLOR;
+      const dim = (!!neighbours && !neighbours.has(n.id)) || (!!query && !queryMatch(n.id));
+      const cols = active.get(n.id) ?? [];
+      const k = `${color}|${dim}|${n.id === focus}|${cols.join(',')}`;
+      const hit = cache.get(n.id);
+      const node = hit && hit.base === n && hit.key === k ? hit.out : { ...n, data: { ...n.data, color, dim, focus: n.id === focus, active: cols } };
+      next.set(n.id, { key: k, base: n, out: node });
+      return node;
+    });
+    nodeCache.current = next;
+    return out;
+  }, [nodes, neighbours, focus, focusRels, colorOf, query, queryMatch]);
+
   const shownEdges = useMemo(
     () =>
       edges.map((e) => {
-        const on = e.selected || (single && (e.source === single || e.target === single));
-        const r = (e.data as { relation: Relation }).relation;
-        // labels only where they help: highlighted lines, or small diagrams
-        const label = on || edges.length <= 40 ? e.label : undefined;
-        if (on)
-          return {
-            ...e,
-            label,
-            animated: true,
-            markerStart: `rl-${r.kind === 'one-to-one' ? 'one' : 'many'}-sel`,
-            markerEnd: `rl-${r.optional ? 'zone' : 'one'}-sel`,
-            style: { ...e.style, stroke: TONE.sel, strokeWidth: 2 },
-          };
-        return neighbours ? { ...e, label: undefined, style: { ...e.style, opacity: 0.25 } } : { ...e, label };
+        const { relation: r, tone } = e.data as { relation: Relation; tone: Tone };
+        const on = e.selected || (!!focus && (e.source === focus || e.target === focus));
+        const t: Tone = on ? 'sel' : tone;
+        return {
+          ...e,
+          type: 'default',
+          // relation type at the ends: open circle = many (the foreign key side), filled = one
+          markerStart: `rl-${r.kind === 'one-to-one' ? 'one' : 'many'}-${t}`,
+          markerEnd: `rl-one-${t}`,
+          zIndex: on ? 1 : 0,
+          style: {
+            stroke: TONE[t],
+            strokeWidth: on ? 1.8 : 1.1,
+            strokeDasharray: r.change === 'removed' || r.guessed ? '4 4' : r.virtual ? '1.5 3' : undefined,
+            opacity: focus ? (on ? 1 : 0.1) : query ? 0.35 : 0.75,
+          },
+        };
       }),
-    [edges, single, neighbours],
+    [edges, focus, query],
   );
 
-  const matches = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return q ? tables.filter((t) => t.name.toLowerCase().includes(q)).slice(0, 8) : [];
-  }, [search, tables]);
+  // the sidebar outline: tables by group, the selected table and what it can do
+  const actionsRef = useRef<DiagramActions>(null!);
+  actionsRef.current = {
+    pin: (name) => {
+      if (name) focusTable(name);
+      else {
+        setNodes((ns) => ns.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
+      }
+    },
+    open: (name, view) => openTable(name, byName.get(name)?.kind, view),
+    ask: () => setAskOpen(true),
+    saveGuess: (r) => useSchema.getState().saveKey(cid, database, { table: r.from, columns: r.fromColumns, refTable: r.to, refColumns: r.toColumns }),
+    removeVirtual: (r) => {
+      const k = virtualKeys.find((v) => v.table === r.from && v.columns.join(',') === r.fromColumns.join(','));
+      if (k) useSchema.getState().deleteKey(cid, database, k.id);
+    },
+    expand: addRoot,
+    filterByName,
+  };
+  const actions = useMemo<DiagramActions>(
+    () => ({
+      pin: (n) => actionsRef.current.pin(n),
+      open: (n, v) => actionsRef.current.open(n, v),
+      ask: () => actionsRef.current.ask(),
+      saveGuess: (r) => actionsRef.current.saveGuess(r),
+      removeVirtual: (r) => actionsRef.current.removeVirtual(r),
+      expand: (n) => actionsRef.current.expand(n),
+      filterByName: (p) => actionsRef.current.filterByName(p),
+    }),
+    [],
+  );
+  const expandable = useMemo(() => new Set(big || namePattern ? shownTables.map((t) => t.name).filter((n) => !roots.includes(n)) : []), [big, namePattern, shownTables, roots]);
+  useEffect(() => {
+    useDiagramView.getState().publish(tab.id, { tables: shownTables, allTables: tables, relations, groups, colors: colorOf, pinned: single, expandable, namePattern, actions });
+  }, [tab.id, shownTables, tables, relations, groups, colorOf, single, expandable, namePattern, actions]);
+  useEffect(() => () => useDiagramView.getState().drop(tab.id), [tab.id]);
 
   const isDark = themeMode === 'system' ? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false) : themeMode === 'dark';
   const summary = diff?.summary;
   const since = compare ? new Date(compare.takenAt).toLocaleString() : null;
+  const showAsk = askOpen || selectedNodes.length > 1 || selectedEdges.length > 0;
+  const clearSelection = () => actions.pin(null);
+  const hideHint = () => {
+    setHint(false);
+    try {
+      localStorage.setItem(HINT_KEY, 'off');
+    } catch {
+      /* the hint comes back next time */
+    }
+  };
 
   if (entry.error) return <CenteredState error={entry.error} onRetry={() => useSchema.getState().load(cid, database, true)} />;
   if (!entry.live) return <CenteredState loading />;
 
   return (
     <div className="relative flex min-w-0 flex-1 flex-col" data-testid="diagram">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-2.5">
-        <div className="relative w-48 shrink-0">
-          <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
-          <input
-            className="field h-7 pl-8 text-[12.5px]"
-            placeholder={`Find among ${formatCount(tables.length)} tables`}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && matches[0]) {
-                focusTable(matches[0].name);
-                setSearch('');
-              }
-              if (e.key === 'Escape') setSearch('');
-            }}
-            data-testid="diagram-search"
-          />
-          {matches.length > 0 && (
-            <div className="fade-in absolute left-0 top-8 z-30 w-72 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]">
-              {matches.map((t) => (
-                <button
-                  key={t.name}
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-surface-3"
-                  onClick={() => {
-                    focusTable(t.name);
-                    setSearch('');
-                  }}
-                >
-                  <Table2 size={12} className="shrink-0 text-ink-3" /> <span className="mono truncate">{t.name}</span>
-                </button>
-              ))}
-            </div>
+      <div className="flex h-10 shrink-0 items-center gap-3.5 border-b border-line px-3 text-[12.5px]">
+        <span className="shrink-0 whitespace-nowrap text-ink-2" data-testid="focus-info">
+          <b className="font-semibold text-ink">{formatCount(shownTables.length)}</b> of {formatCount(tables.length)} tables
+          {hideLonely && lonely > 0 && <> · {formatCount(lonely)} unrelated hidden</>}
+          {namePattern && (
+            <span className="ml-2 inline-flex items-center gap-1 rounded-md bg-accent-soft py-px pl-2 pr-1 align-middle text-[12px] text-ink" data-testid="name-filter">
+              <span className="mono">{namePattern}</span>
+              <button className="rounded px-0.5 text-ink-3 hover:text-ink" onClick={() => filterByName(null)} title="Show all tables again" aria-label="Remove the name filter">
+                <X size={11} />
+              </button>
+            </span>
           )}
-        </div>
-        <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[12px] text-ink-2" title="Draw relations guessed from column names (customer_id → customers.id) where the database has no foreign key">
-          <input type="checkbox" checked={guess} onChange={(e) => setGuess(e.target.checked)} data-testid="guess-relations" /> Guessed relations
+          {big && (roots.length > 0 || namePattern) && (
+            <button className="ml-1.5 text-link hover:underline" onClick={() => filterByName(null)}>
+              Clear
+            </button>
+          )}
+          {showAll && candidates.length > FOCUS_FROM && (
+            <button className="ml-1.5 text-link hover:underline" onClick={() => setShowAll(false)}>
+              Focus mode
+            </button>
+          )}
+        </span>
+        <div className="h-[18px] w-px shrink-0 bg-line" />
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink-2" title="Draw relations guessed from column names (customer_id → customers.id) where the database has no foreign key">
+          <input type="checkbox" className="accent-[var(--accent)]" checked={guess} onChange={(e) => setGuess(e.target.checked)} data-testid="guess-relations" /> Guessed relations
         </label>
-        <label className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[12px] text-ink-2" title="Hide tables that are not related to any other table; search still finds them">
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-ink-2" title="Hide tables that are not related to any other table; search still finds them">
           <input
             type="checkbox"
+            className="accent-[var(--accent)]"
             checked={hideLonely}
             onChange={(e) => {
               setHideLonely(e.target.checked);
               setForced(new Set());
             }}
             data-testid="hide-lonely"
-          />{' '}
-          Hide unrelated{lonely ? ` (${formatCount(lonely)})` : ''}
+          />
+          Hide unrelated
         </label>
-        <div className="mx-0.5 h-5 w-px bg-line" />
         {/* schema changes since a snapshot */}
-        {entry.snapshots.length ? (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-[12px]" data-testid="schema-changes">
-            <label className="flex shrink-0 items-center gap-1.5 text-ink-2">
-              <input type="checkbox" checked={showChanges} onChange={(e) => setShowChanges(e.target.checked)} /> Changes since
+        {entry.snapshots.length > 0 && (
+          <div className="flex min-w-0 items-center gap-1.5 overflow-hidden text-[12px]" data-testid="schema-changes">
+            <div className="h-[18px] w-px shrink-0 bg-line" />
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-ink-2">
+              <input type="checkbox" className="accent-[var(--accent)]" checked={showChanges} onChange={(e) => setShowChanges(e.target.checked)} /> Changes since
             </label>
             <select
-              className="h-7 min-w-0 max-w-[190px] shrink rounded-md border border-line bg-surface px-1.5 text-[12px] text-ink-2"
+              className="h-7 min-w-0 max-w-[170px] shrink rounded-md border border-line bg-surface px-1.5 text-[12px] text-ink-2"
               value={entry.compareTo}
               onChange={(e) => useSchema.getState().setCompare(cid, database, Number(e.target.value))}
               disabled={!showChanges}
@@ -358,128 +443,175 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
               </span>
             )}
           </div>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-[12px] text-ink-3">Mark the schema as seen to see later changes (new tables, columns, keys).</span>
         )}
-        {(big || showAll) && candidates.length > FOCUS_FROM && (
-          <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-ink-3" data-testid="focus-info">
-            {big ? `${formatCount(shownTables.length)} of ${formatCount(candidates.length)} tables` : 'All tables'}
-            {big && roots.length > 0 && (
-              <button className="text-link hover:underline" onClick={() => (setRoots([]), setForced(new Set()))}>
-                Clear
-              </button>
-            )}
-            {showAll && (
-              <button className="text-link hover:underline" onClick={() => setShowAll(false)}>
-                Focus mode
-              </button>
-            )}
-          </span>
-        )}
-        <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2" onClick={() => useSchema.getState().markSeen(cid, database)} title="Save the current schema; changes after this are highlighted" data-testid="mark-seen">
-          <Check size={13} /> Mark as seen
+        <div className="flex-1" />
+        <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2.5 text-ink-2" onClick={() => flow.fitView({ padding: 0.12, duration: 300, maxZoom: 1 })} title="Fit everything in view">
+          <Maximize size={13} /> Fit
         </button>
-        <button className="icon-btn" onClick={() => flow.fitView({ padding: 0.12, duration: 300, maxZoom: 1 })} title="Fit everything in view" aria-label="Fit to view">
-          <Maximize size={14} />
-        </button>
-        <button className="icon-btn" onClick={() => useSchema.getState().load(cid, database, true)} title="Read the schema again" aria-label="Reload schema">
-          {entry.loading || laying ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+        <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2.5 text-ink-2" onClick={() => useSchema.getState().load(cid, database, true)} title="Read the schema again">
+          {entry.loading || laying ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
         </button>
       </div>
 
-      <div className="relative flex min-h-0 flex-1">
-        <div className="relative min-w-0 flex-1">
-          <RelationMarkers />
-          {big && shownTables.length === 0 && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center p-6" data-testid="focus-start">
-              <div className="w-full max-w-[520px] rounded-xl border border-line bg-surface p-5 shadow-[var(--shadow)]">
-                <div className="text-[14px] font-semibold text-ink">{formatCount(candidates.length)} related tables</div>
-                <p className="mt-1 text-[12.5px] text-ink-2">
-                  Too many to read at once. Pick a table (or search above): it is shown with the tables it links to. Add more from the side panel.
-                </p>
-                <div className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-3">Most linked</div>
-                <div className="mt-1.5 grid grid-cols-2 gap-1">
-                  {hubs.map((h) => (
-                    <button key={h.name} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-surface-2" onClick={() => addRoot(h.name)}>
-                      <Table2 size={12} className="shrink-0 text-ink-3" />
-                      <span className="mono min-w-0 flex-1 truncate">{h.name}</span>
-                      <span className="shrink-0 text-[11px] tabular-nums text-ink-3">{h.links}</span>
+      <div className="relative min-h-0 flex-1">
+        <RelationMarkers />
+        {big && shownTables.length === 0 && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center p-6" data-testid="focus-start">
+            <div className="w-full max-w-[520px] rounded-xl border border-line bg-surface p-5 shadow-[var(--shadow)]">
+              <div className="text-[14px] font-semibold text-ink">{formatCount(candidates.length)} related tables</div>
+              <p className="mt-1 text-[12.5px] text-ink-2">Too many to read at once. Pick a table (or find one in the sidebar): it is shown with the tables it links to. Add more from the sidebar.</p>
+              <div className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-ink-3">Most linked</div>
+              <div className="mt-1.5 grid grid-cols-2 gap-1">
+                {hubs.map((h) => (
+                  <button key={h.name} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-surface-2" onClick={() => addRoot(h.name)}>
+                    <Table2 size={12} className="shrink-0 text-ink-3" />
+                    <span className="mono min-w-0 flex-1 truncate">{h.name}</span>
+                    <span className="shrink-0 text-[11px] tabular-nums text-ink-3">{h.links}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-ink-3">By name</div>
+              {affixes.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {affixes.map((a) => (
+                    <button key={a.pattern} className="flex h-6 items-center gap-1.5 rounded-md bg-surface-2 px-2 text-[12px] hover:bg-surface-3" onClick={() => filterByName(a.pattern)} data-testid="name-affix">
+                      <span className="mono text-ink">{a.pattern}</span>
+                      <span className="tabular-nums text-ink-3">{a.tables}</span>
                     </button>
                   ))}
                 </div>
-                <button className="btn btn-ghost mt-3 h-7 text-ink-3" onClick={() => setShowAll(true)} title="Draws every table; can be slow or crash on very big databases">
-                  Show all {formatCount(candidates.length)} tables (slow)
+              )}
+              <form
+                className="mt-2 flex gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (patternDraft.trim()) filterByName(patternDraft);
+                }}
+              >
+                <input className="field mono h-7 text-[12.5px]" placeholder="tbl_*  ·  *_log  ·  any part of the name" value={patternDraft} onChange={(e) => setPatternDraft(e.target.value)} data-testid="name-pattern" />
+                <button type="submit" className="btn h-7 shrink-0 px-2.5" disabled={!patternDraft.trim()}>
+                  Show
                 </button>
-              </div>
+              </form>
+              {patternDraft.trim() && <div className="mt-1 text-[11.5px] text-ink-3">{formatCount(candidates.filter((t) => nameMatcher(patternDraft)(t.name)).length)} matching tables</div>}
+              <button className="btn btn-ghost mt-3 h-7 text-ink-3" onClick={() => setShowAll(true)} title="Draws every table; can be slow or crash on very big databases">
+                Show all {formatCount(candidates.length)} tables (slow)
+              </button>
             </div>
-          )}
-          <ReactFlow
-            nodes={shownNodes}
-            edges={shownEdges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            nodeTypes={nodeTypes}
-            colorMode={isDark ? 'dark' : 'light'}
-            minZoom={0.05}
-            maxZoom={2}
-            onlyRenderVisibleElements
-            selectionKeyCode="Shift"
-            multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
-            nodesConnectable={false}
-            proOptions={{ hideAttribution: true }}
-            onNodeDoubleClick={(_, n) => openTable(n.id)}
-            onPaneClick={() => setSearch('')}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="var(--border-strong)" />
-            <Controls showInteractive={false} position="bottom-left" />
-            <MiniMap pannable zoomable position="bottom-right" nodeColor={(n) => ((n.data as { table: TableView }).table.change ? 'var(--warning)' : 'var(--border-strong)')} maskColor={isDark ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.6)'} />
-          </ReactFlow>
-          {laying && (
-            <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 shadow-sm">
-              <Loader2 size={12} className="animate-spin" /> Arranging {formatCount(tables.length)} tables…
-            </div>
-          )}
-          {selectedNames.size > 0 && (
-            <AskBar
-              key={[...selectedNames].sort().join('|')}
-              tables={[...selectedNames].map((n) => byName.get(n)).filter((t): t is TableView => !!t)}
-              relations={relationsBetween(relations, selectedNames, selectedEdges)}
-              onClear={() => {
-                setNodes((ns) => ns.map((n) => ({ ...n, selected: false })));
-                setEdges((es) => es.map((e) => ({ ...e, selected: false })));
-              }}
-              onAsk={(question, ts, rs) =>
-                useChat.getState().compose(
-                  cid,
-                  diagramPrompt({ question, database, engine: session.config.engine, tables: ts, relations: rs, changesSince: showChanges ? since : null, projectFolder: config.projectFolder ?? null }),
-                )
-              }
-              projectFolder={config.projectFolder ?? null}
-              onConnectProject={() => useApp.getState().setEditing({ ...config })}
-              showChanges={showChanges}
-            />
-          )}
-          {!selectedNames.size && !laying && !(big && shownTables.length === 0) && (
-            <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 whitespace-nowrap rounded-full bg-surface/90 px-3 py-1 text-[11.5px] text-ink-3 shadow-sm">
-              Click a table or a line to ask Claude about it · ⇧-drag to select several · double-click opens the data
-            </div>
-          )}
-        </div>
-        {single && byName.get(single) && (
-          <TableDetails
-            table={byName.get(single)!}
-            relations={relations}
-            onOpen={(view) => openTable(single, byName.get(single)!.kind, view)}
-            onShow={focusTable}
-            onExpand={big && !roots.includes(single) ? () => addRoot(single) : undefined}
-            onSaveGuess={(r) => useSchema.getState().saveKey(cid, database, { table: r.from, columns: r.fromColumns, refTable: r.to, refColumns: r.toColumns })}
-            onRemoveVirtual={(r) => {
-              const k = virtualKeys.find((v) => v.table === r.from && v.columns.join(',') === r.fromColumns.join(','));
-              if (k) useSchema.getState().deleteKey(cid, database, k.id);
-            }}
+          </div>
+        )}
+        <ReactFlow
+          nodes={shownNodes}
+          edges={shownEdges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          colorMode={isDark ? 'dark' : 'light'}
+          style={{ background: 'color-mix(in srgb, var(--surface-2) 45%, var(--bg))' }}
+          minZoom={0.05}
+          maxZoom={2}
+          onlyRenderVisibleElements
+          selectionKeyCode="Shift"
+          multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+          nodesConnectable={false}
+          proOptions={{ hideAttribution: true }}
+          onNodeDoubleClick={(_, n) => openTable(n.id)}
+          onNodeMouseEnter={(_, n) => useDiagramView.getState().setHover(tab.id, n.id)}
+          onNodeMouseLeave={() => useDiagramView.getState().setHover(tab.id, null)}
+          onPaneClick={() => setAskOpen(false)}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="var(--border-strong)" />
+          <Panel position="bottom-left" className="!m-3.5 flex items-center gap-2.5">
+            <ZoomBar onFit={() => flow.fitView({ padding: 0.12, duration: 300, maxZoom: 1 })} />
+            <Legend compact={compact} virtual={relations.some((r) => r.virtual)} />
+          </Panel>
+          <MiniMap
+            pannable
+            zoomable
+            position="bottom-right"
+            className="!m-3.5 overflow-hidden !rounded-lg border border-line-strong"
+            style={{ width: 172, height: 116 }}
+            bgColor="var(--surface)"
+            nodeBorderRadius={2}
+            maskColor={isDark ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.55)'}
+            maskStrokeColor="var(--accent)"
+            maskStrokeWidth={2}
+            nodeColor={(n) =>
+              n.id === focus ? 'var(--accent)' : (n.data as { table: TableView }).table.change ? 'var(--warning)' : !neighbours || neighbours.has(n.id) ? 'var(--text-3)' : 'var(--border-strong)'
+            }
+          />
+        </ReactFlow>
+        {laying && (
+          <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-[12px] text-ink-2 shadow-sm">
+            <Loader2 size={12} className="animate-spin" /> Arranging {formatCount(shownTables.length)} tables…
+          </div>
+        )}
+        {showAsk && selectedNames.size > 0 && (
+          <AskBar
+            key={[...selectedNames].sort().join('|')}
+            tables={[...selectedNames].map((n) => byName.get(n)).filter((t): t is TableView => !!t)}
+            relations={relationsBetween(relations, selectedNames, selectedEdges)}
+            onClear={() => (askOpen && single ? setAskOpen(false) : clearSelection())}
+            onAsk={(question, ts, rs) =>
+              useChat.getState().compose(
+                cid,
+                diagramPrompt({ question, database, engine: session.config.engine, tables: ts, relations: rs, changesSince: showChanges ? since : null, projectFolder: config.projectFolder ?? null }),
+              )
+            }
+            projectFolder={config.projectFolder ?? null}
+            onConnectProject={() => useApp.getState().setEditing({ ...config })}
+            showChanges={showChanges}
           />
         )}
+        {hint && !showAsk && !laying && !(big && shownTables.length === 0) && (
+          <div className="absolute left-1/2 top-3 z-[5] flex -translate-x-1/2 items-center gap-2.5 whitespace-nowrap rounded-full bg-ink py-1.5 pl-3.5 pr-2 text-[12px] text-bg shadow-sm" data-testid="diagram-hint">
+            Click a table to focus its relations · double-click opens data · ⇧-drag selects several
+            <button className="rounded-full px-1 opacity-70 hover:opacity-100" onClick={hideHint} aria-label="Hide the hint">
+              <X size={12} />
+            </button>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** − 100% + : the zoom, with a click on the number fitting everything */
+function ZoomBar({ onFit }: { onFit: () => void }) {
+  const zoom = useStore((s) => s.transform[2]);
+  const flow = useReactFlow();
+  return (
+    <div className="flex items-center rounded-lg border border-line-strong bg-surface shadow-sm" data-testid="zoom-bar">
+      <button className="flex h-[30px] w-[30px] items-center justify-center text-ink-2 hover:text-ink" onClick={() => flow.zoomOut({ duration: 150 })} aria-label="Zoom out">
+        <Minus size={14} />
+      </button>
+      <button className="w-12 text-center text-[12px] tabular-nums text-ink-2 hover:text-ink" onClick={onFit} title="Fit everything in view">
+        {Math.round(zoom * 100)}%
+      </button>
+      <button className="flex h-[30px] w-[30px] items-center justify-center text-ink-2 hover:text-ink" onClick={() => flow.zoomIn({ duration: 150 })} aria-label="Zoom in">
+        <Plus size={14} />
+      </button>
+    </div>
+  );
+}
+
+/** What the lines and their ends mean */
+function Legend({ compact, virtual }: { compact: boolean; virtual: boolean }) {
+  const line = (dash?: string) => <svg width="22" height="2" className="shrink-0" aria-hidden><line x1="0" y1="1" x2="22" y2="1" stroke="var(--text-3)" strokeWidth="1.5" strokeDasharray={dash} /></svg>;
+  return (
+    <div className="flex items-center gap-3.5 whitespace-nowrap rounded-lg border border-line-strong bg-surface px-3 py-[7px] text-[11.5px] text-ink-2 shadow-sm" data-testid="diagram-legend">
+      <span className="flex items-center gap-1.5">{line()}Foreign key</span>
+      <span className="flex items-center gap-1.5">{line('4 4')}Guessed</span>
+      {virtual && <span className="flex items-center gap-1.5">{line('1.5 3')}Virtual</span>}
+      <span className="flex items-center gap-1.5">
+        <span className="h-[7px] w-[7px] rounded-full border-[1.4px] border-ink-3" />
+        many
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-[7px] w-[7px] rounded-full bg-ink-3" />
+        one
+      </span>
+      <span className="text-ink-3">{compact ? 'Zoom in to see key columns' : 'Zoom out for names only'}</span>
     </div>
   );
 }
@@ -553,106 +685,4 @@ function AskBar({
       <div className="mt-1.5 text-[11px] text-ink-3">Opens the Claude panel with the question and these tables as context; you can edit it before sending.</div>
     </div>
   );
-}
-
-function TableDetails({
-  table: t,
-  relations,
-  onOpen,
-  onShow,
-  onExpand,
-  onSaveGuess,
-  onRemoveVirtual,
-}: {
-  table: TableView;
-  relations: Relation[];
-  onOpen: (view: 'data' | 'structure') => void;
-  onShow: (name: string) => void;
-  /** focus mode: also show the tables this one links to */
-  onExpand?: () => void;
-  onSaveGuess: (r: Relation) => void;
-  onRemoveVirtual: (r: Relation) => void;
-}) {
-  const out = relations.filter((r) => r.from === t.name);
-  const into = relations.filter((r) => r.to === t.name);
-  return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-line bg-bg text-[12px]" data-testid="diagram-details">
-      <div className="space-y-2 border-b border-line p-3">
-        <div className="mono truncate text-[13px] font-semibold text-ink" title={t.name}>
-          {t.name}
-        </div>
-        <div className="text-ink-3">
-          {t.kind === 'view' ? 'View' : 'Table'} · {t.columns.length} columns{t.rowEstimate != null ? ` · ~${formatCount(t.rowEstimate)} rows` : ''}
-        </div>
-        {t.comment && <div className="text-ink-2">{t.comment}</div>}
-        <div className="flex gap-1.5">
-          <button className="btn h-7" onClick={() => onOpen('data')}>
-            Open data
-          </button>
-          <button className="btn btn-ghost h-7" onClick={() => onOpen('structure')}>
-            Structure
-          </button>
-        </div>
-        {onExpand && (
-          <button className="btn h-7 w-full justify-center" onClick={onExpand} data-testid="expand-table">
-            Show related tables
-          </button>
-        )}
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {(out.length > 0 || into.length > 0) && (
-          <div className="mb-3 space-y-1">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Relations</div>
-            {out.map((r) => (
-              <div key={r.id} className="flex items-center gap-1">
-                <button className="mono min-w-0 flex-1 truncate text-left text-link hover:underline" onClick={() => onShow(r.to)}>
-                  {r.fromColumns.join(', ')} → {r.to}.{r.toColumns.join(', ')} <span className="text-ink-3">· {kindLabel(r)}{r.guessed ? ' · guessed' : r.virtual ? ' · virtual' : ''}</span>
-                </button>
-                <RelationAction r={r} onSaveGuess={onSaveGuess} onRemoveVirtual={onRemoveVirtual} />
-              </div>
-            ))}
-            {into.map((r) => (
-              <div key={r.id} className="flex items-center gap-1">
-                <button className="mono min-w-0 flex-1 truncate text-left text-ink-2 hover:underline" onClick={() => onShow(r.from)}>
-                  ← {r.from}.{r.fromColumns.join(', ')} <span className="text-ink-3">· {r.kind === 'one-to-one' ? '1:1' : '1:N'}{r.guessed ? ' · guessed' : r.virtual ? ' · virtual' : ''}</span>
-                </button>
-                <RelationAction r={r} onSaveGuess={onSaveGuess} onRemoveVirtual={onRemoveVirtual} />
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Columns</div>
-        {t.columns.map((c) => (
-          <div key={c.name} className={cx('flex items-baseline gap-2 py-0.5', c.change === 'removed' && 'text-ink-3 line-through')}>
-            <span className={cx('mono min-w-0 flex-1 truncate', c.primaryKey && 'font-semibold')}>{c.name}</span>
-            <span className="mono max-w-[50%] truncate text-[11px] text-ink-3" title={c.dataType}>
-              {c.dataType}
-            </span>
-            {c.change && (
-              <span className={cx('shrink-0 text-[10.5px] font-semibold', c.change === 'added' ? 'text-success' : c.change === 'removed' ? 'text-danger' : 'text-warning')} title={c.detail ?? undefined}>
-                {c.change}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-/** Save a guessed relation as a virtual foreign key, or remove a virtual one */
-function RelationAction({ r, onSaveGuess, onRemoveVirtual }: { r: Relation; onSaveGuess: (r: Relation) => void; onRemoveVirtual: (r: Relation) => void }) {
-  if (r.guessed)
-    return (
-      <button className="shrink-0 rounded px-1.5 text-[10.5px] font-semibold text-accent hover:bg-surface-2" onClick={() => onSaveGuess(r)} title="Confirm: save as a virtual foreign key">
-        Save
-      </button>
-    );
-  if (r.virtual)
-    return (
-      <button className="shrink-0 rounded px-1 text-ink-3 hover:bg-surface-2 hover:text-danger" onClick={() => onRemoveVirtual(r)} title="Remove this virtual foreign key" aria-label="Remove virtual foreign key">
-        <X size={11} />
-      </button>
-    );
-  return null;
 }
