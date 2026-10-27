@@ -60,13 +60,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![call])
         .build(tauri::generate_context!())
         .expect("error while building Rowline")
-        .run(|app, event| {
+        .run(|app, event| match event {
+            // Rowline has one window: closing it quits, so nothing keeps running unseen in the background
+            // (an open prod connection, the `rowline` command socket).
+            tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::Destroyed, .. } if app.webview_windows().is_empty() => app.exit(0),
             // Quitting must not leave Claude Code processes behind.
-            if let tauri::RunEvent::Exit = event {
+            tauri::RunEvent::Exit => {
                 if let Some(state) = app.try_state::<Arc<AppState>>() {
                     tauri::async_runtime::block_on(claude::runner::kill_all(&state));
                 }
             }
+            _ => {}
         });
 }
 
