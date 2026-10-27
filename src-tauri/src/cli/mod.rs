@@ -15,8 +15,6 @@ pub const EXIT_BLOCKED: i32 = 2;
 /// Rowline is not running
 pub const EXIT_NO_APP: i32 = 3;
 
-const COMMANDS: &[&str] = &["connections", "tables", "describe", "query", "help", "--help", "-h", "--version", "-V", "install"];
-
 const HELP: &str = "rowline — read-only database access through the Rowline app
 
 Usage:
@@ -47,13 +45,14 @@ Example:
   rowline query --conn \"prod replica\" \"SELECT id, status FROM orders WHERE id = 42\"
 ";
 
-/// True when the arguments ask for the command line, not the app window.
+/// True when this is the command line, not the app window. Only a start without arguments (Finder, Dock,
+/// `open`, tauri dev) or with the arguments macOS itself adds (`-psn_…`, `-NS…`) opens the window: any other
+/// argument means a shell or an agent called us, and opening the app then would be a surprise.
 /// `argv0` is how the program was started: a bare name or ~/.local/bin means a shell started it.
 pub fn is_cli(argv0: &str, args: &[String]) -> bool {
-    match args.first() {
-        Some(a) => COMMANDS.contains(&a.as_str()),
-        None => !argv0.contains('/') || argv0.contains("/.local/bin/"),
-    }
+    let from_shell = !argv0.contains('/') || argv0.contains("/.local/bin/");
+    let system_arg = |a: &String| a.starts_with("-psn_") || a.starts_with("-NS") || matches!(a.as_str(), "YES" | "NO");
+    from_shell || !args.iter().all(system_arg)
 }
 
 /// Where the app listens. ROWLINE_SOCKET overrides it (tests, dev bridge).
@@ -83,10 +82,12 @@ pub enum Format {
     Csv,
 }
 
+/// The command is the first word that is not an option: `rowline --conn x query …` works too.
 pub fn parse(args: &[String]) -> Result<Parsed, String> {
-    let mut p = Parsed { cmd: args.first().cloned().unwrap_or_else(|| "help".into()), ..Default::default() };
+    let mut p = Parsed::default();
+    let mut cmd: Option<String> = None;
     let mut rest = Vec::new();
-    let mut it = args.iter().skip(1);
+    let mut it = args.iter();
     while let Some(a) = it.next() {
         let (flag, inline) = match a.split_once('=') {
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
@@ -108,11 +109,15 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
                     other => return Err(format!("Unknown format \"{other}\": use json, table or csv")),
                 }
             }
+            "-h" | "--help" => cmd = Some("help".into()),
+            "-V" | "--version" => cmd = Some("--version".into()),
             "--" => rest.extend(it.by_ref().cloned()),
             f if f.starts_with('-') && f.len() > 1 => return Err(format!("Unknown option {f}. See rowline help.")),
+            _ if cmd.is_none() => cmd = Some(a.clone()),
             _ => rest.push(a.clone()),
         }
     }
+    p.cmd = cmd.unwrap_or_else(|| "help".into());
     if !rest.is_empty() {
         p.arg = Some(rest.join(" "));
     }
@@ -310,6 +315,23 @@ mod tests {
         assert!(is_cli("rowline", &[]), "typed in a shell: help");
         assert!(is_cli("/Users/me/.local/bin/rowline", &[]));
         assert!(!is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &args(&["-psn_0_123"])));
+        assert!(!is_cli("/x/target/debug/rowline", &args(&["-NSDocumentRevisionsDebugMode", "YES"])));
+        // an agent must never open the window by accident: options first, typos, the full path
+        for a in [&["--conn", "prod", "query", "SELECT 1"][..], &["sql", "SELECT 1"], &["-c", "x"], &["--format", "table", "connections"]] {
+            assert!(is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &args(a)), "{a:?}");
+            assert!(is_cli("/Users/me/.local/bin/rowline", &args(a)), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn the_command_can_come_after_options() {
+        let p = parse(&args(&["--conn", "prod", "-n", "5", "query", "SELECT", "1"])).unwrap();
+        assert_eq!((p.cmd.as_str(), p.conn.as_deref(), p.limit, p.arg.as_deref()), ("query", Some("prod"), Some(5), Some("SELECT 1")));
+        assert_eq!(parse(&args(&["-f", "table", "connections"])).unwrap().cmd, "connections");
+        assert_eq!(parse(&args(&["--help"])).unwrap().cmd, "help");
+        assert_eq!(parse(&args(&["query", "--help"])).unwrap().cmd, "help");
+        assert_eq!(parse(&[]).unwrap().cmd, "help");
+        assert!(run(&args(&["sql", "SELECT 1"])).unwrap_err().1.contains("Unknown command \"sql\""));
     }
 
     #[test]
