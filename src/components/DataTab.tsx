@@ -393,6 +393,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
           <div className="mx-0.5 h-5 w-px bg-line" />
           <FilterBar
             ref={filterRef}
+            usageKey={`${id}/${database ?? ''}/${tab.table}`}
             engine={session.config.engine}
             columns={filterColumns}
             rules={rules}

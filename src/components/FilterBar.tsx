@@ -3,6 +3,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { createPortal } from 'react-dom';
 import type { FilterColumn } from '../lib/filterComplete';
 import { FILTER_OPS, NO_VALUE_OPS, RAW_SQL, enumValues, newRule, ruleLabel, type FilterOp, type FilterRule } from '../lib/filters';
+import { loadFilterUsage, rankColumns, rankOps, recordFilterUse, type FilterUsage } from '../lib/filterUsage';
 import type { Engine, SortSpec } from '../lib/types';
 import { MOD, cx } from '../lib/ui';
 import { useDismiss, type DismissReason } from '../lib/useDismiss';
@@ -30,6 +31,8 @@ interface Props {
   onSqlClear: () => void;
   /** common values of a column, for the value field */
   suggestValues?: (column: string) => Promise<string[]>;
+  /** `connection/database/table`: the columns filtered most in this table come first */
+  usageKey: string;
 }
 
 type Popover = { kind: 'rule'; ruleId: string | null; x: number; y: number } | { kind: 'sort'; x: number; y: number };
@@ -44,7 +47,8 @@ const anchor = (el: HTMLElement) => {
  * or the raw SQL WHERE box. Chips apply as soon as they are added or changed.
  */
 const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, ref) {
-  const { engine, columns, rules, onRulesChange, sort, onSortChange, mode, onModeChange, sqlText, onSqlTextChange, onSqlApply, onSqlClear, suggestValues } = props;
+  const { engine, columns, rules, onRulesChange, sort, onSortChange, mode, onModeChange, sqlText, onSqlTextChange, onSqlApply, onSqlClear, suggestValues, usageKey } = props;
+  const [usage, setUsage] = useState<FilterUsage>(loadFilterUsage);
   const [popover, setPopover] = useState<Popover | null>(null);
   /**
    * Unfinished filters (key: rule id, or "new"): closing the editor by clicking elsewhere keeps what was typed,
@@ -163,10 +167,13 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
           columns={columns}
           rule={rules.find((r) => r.id === popover.ruleId) ?? null}
           draft={drafts[popover.ruleId ?? 'new']}
+          usage={usage}
+          usageKey={usageKey}
           onDraftChange={(d) => setDrafts((all) => ({ ...all, [popover.ruleId ?? 'new']: d }))}
           suggestValues={suggestValues}
           onSave={(rule) => {
             onRulesChange(popover.ruleId ? rules.map((r) => (r.id === rule.id ? rule : r)) : [...rules, rule]);
+            setUsage((u) => recordFilterUse(u, usageKey, rule));
             dropDraft(popover.ruleId ?? 'new');
             close();
           }}
@@ -196,6 +203,23 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
 
 export default FilterBar;
 
+/** Options of a select: "Most used" first when there are any, then the rest */
+function Grouped({ frequent, restItems, restLabel }: { frequent: readonly string[]; restItems: readonly string[]; restLabel: string }) {
+  const options = (items: readonly string[]) =>
+    items.map((v) => (
+      <option key={v} value={v}>
+        {v}
+      </option>
+    ));
+  if (!frequent.length) return <>{options(restItems)}</>;
+  return (
+    <>
+      <optgroup label="Most used">{options(frequent)}</optgroup>
+      <optgroup label={restLabel}>{options(restItems)}</optgroup>
+    </>
+  );
+}
+
 function Floating({ x, y, onClose, children, width = 380 }: { x: number; y: number; onClose: (reason: DismissReason) => void; children: React.ReactNode; width?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   // a form: stays open while you switch to another app (to copy a value)
@@ -218,6 +242,8 @@ function RuleEditor({
   columns,
   rule,
   draft: saved,
+  usage,
+  usageKey,
   onDraftChange,
   onSave,
   onRemove,
@@ -230,13 +256,23 @@ function RuleEditor({
   rule: FilterRule | null;
   /** what was typed last time and not applied */
   draft?: FilterRule;
+  usage: FilterUsage;
+  usageKey: string;
   onDraftChange: (d: FilterRule) => void;
   onSave: (r: FilterRule) => void;
   onRemove?: () => void;
   onClose: (reason: DismissReason) => void;
   suggestValues?: (column: string) => Promise<string[]>;
 }) {
-  const [draft, setDraft] = useState<FilterRule>(() => saved ?? rule ?? newRule(columns[0]?.name ?? RAW_SQL));
+  // most used first: the columns you filter by in this table, the operators you pick most
+  const columnOrder = rankColumns(
+    columns.map((c) => c.name),
+    usage,
+    usageKey,
+  );
+  const opOrder = rankOps(FILTER_OPS, usage);
+  // a new filter starts on your most used column and operator
+  const [draft, setDraft] = useState<FilterRule>(() => saved ?? rule ?? newRule(columnOrder.frequent[0] ?? columns[0]?.name ?? RAW_SQL, opOrder.frequent[0] ?? '='));
   // values to pick from: ENUM values from the type, else the most common values in the table
   const [suggestions, setSuggestions] = useState<string[]>([]);
   useEffect(() => {
@@ -277,20 +313,12 @@ function RuleEditor({
       <div className="space-y-2" data-testid="rule-editor">
         <div className="flex gap-2">
           <select className="field h-8 min-w-0 flex-1 text-[12.5px]" value={draft.column} onChange={(e) => set({ column: e.target.value })} aria-label="Column" autoFocus>
-            {columns.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name}
-              </option>
-            ))}
+            <Grouped frequent={columnOrder.frequent} restItems={columnOrder.rest} restLabel="All columns" />
             <option value={RAW_SQL}>Raw SQL…</option>
           </select>
           {!raw && (
             <select className="field h-8 w-[130px] text-[12.5px]" value={draft.op} onChange={(e) => set({ op: e.target.value as FilterOp })} aria-label="Operator">
-              {FILTER_OPS.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
+              <Grouped frequent={opOrder.frequent} restItems={opOrder.rest} restLabel="Other" />
             </select>
           )}
         </div>
