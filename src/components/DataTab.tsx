@@ -32,6 +32,8 @@ import ReviewDialog from './ReviewDialog';
 import RowPanel from './RowPanel';
 import StructureView from './StructureView';
 import CellMenu from './CellMenu';
+import ColumnsMenu, { HeaderMenu, type ColumnChoice } from './ColumnsMenu';
+import { loadHidden, saveHidden, visibleIndexes } from '../lib/hiddenColumns';
 import FilterBar, { type FilterBarHandle, type FilterMode } from './FilterBar';
 
 const PAGE_SIZES = [100, 300, 1000];
@@ -127,6 +129,34 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   );
   const meta = useMemo(() => (structure ? columnMeta(columns, structure) : undefined), [columns, structure]);
   const pkColumns = useMemo(() => structure?.columns.filter((c) => c.primaryKey).map((c) => c.name) ?? [], [structure]);
+  // hidden columns (remembered per table): the grid gets only the shown ones and maps back to real indexes
+  const tableKey = `${id}/${database ?? ''}/${tab.table}`;
+  const [hidden, setHiddenState] = useState<string[]>(() => loadHidden(tableKey));
+  // a foreign key jump can reuse this tab for another table
+  useEffect(() => setHiddenState(loadHidden(tableKey)), [tableKey]);
+  const setHidden = useCallback(
+    (next: string[]) => {
+      setHiddenState(next);
+      saveHidden(tableKey, next);
+    },
+    [tableKey],
+  );
+  const [headerMenu, setHeaderMenu] = useState<{ column: string; x: number; y: number } | null>(null);
+  const shownIdx = useMemo(
+    () =>
+      visibleIndexes(
+        columns.map((c) => c.name),
+        hidden,
+      ),
+    [columns, hidden],
+  );
+  const gridColumns = useMemo(() => shownIdx.map((i) => columns[i]), [shownIdx, columns]);
+  const gridMeta = useMemo(() => meta && shownIdx.map((i) => meta[i]), [shownIdx, meta]);
+  const columnChoices = useMemo<ColumnChoice[]>(
+    () => columns.map((c, i) => ({ name: c.name, type: structure?.columns.find((s) => s.name === c.name)?.dataType ?? c.typeName, key: pkColumns.includes(c.name) ? 'PK' : meta?.[i]?.foreignKey ? 'FK' : null })),
+    [columns, structure, pkColumns, meta],
+  );
+  const onlyKeys = () => setHidden(columnChoices.filter((c) => !c.key).map((c) => c.name));
   const editable = tab.objectKind === 'table' && pkColumns.length > 0 && !!result && pkColumns.every((pk) => columns.some((c) => c.name === pk));
   const loadedCount = result?.rows.length ?? 0;
   const rowCount = loadedCount + changes.inserts.length;
@@ -174,6 +204,9 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     },
     [loadedCount, rowKey, changes, columns],
   );
+
+  const gridGetValue = useCallback((row: number, col: number) => getValue(row, shownIdx[col] ?? -1), [getValue, shownIdx]);
+  const gridIsCellEdited = useCallback((row: number, col: number) => isCellEdited(row, shownIdx[col] ?? -1), [isCellEdited, shownIdx]);
 
   const editCell = useCallback(
     (row: number, col: number, value: Cell) => {
@@ -356,6 +389,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={refresh} title={`Reload the data (${MOD}R)`} data-testid="refresh">
         {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
       </button>
+      {result && <ColumnsMenu columns={columnChoices} hidden={hidden} onChange={setHidden} />}
       <button className={cx('btn btn-ghost h-7 gap-1.5 px-2', rowPanelOpen && 'bg-surface-2 text-ink')} onClick={toggleRowPanel} title="Show or hide all fields of the selected row" aria-label="Toggle row details">
         <PanelRight size={13} /> Row details
       </button>
@@ -393,7 +427,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
           <div className="mx-0.5 h-5 w-px bg-line" />
           <FilterBar
             ref={filterRef}
-            usageKey={`${id}/${database ?? ''}/${tab.table}`}
+            usageKey={tableKey}
             engine={session.config.engine}
             columns={filterColumns}
             rules={rules}
@@ -421,20 +455,21 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
         ) : (
           <DataGrid
             ref={gridRef}
-            columns={columns}
-            meta={meta}
+            columns={gridColumns}
+            meta={gridMeta}
             rowCount={rowCount}
-            getValue={getValue}
+            getValue={gridGetValue}
             getRowState={getRowState}
-            isCellEdited={isCellEdited}
+            isCellEdited={gridIsCellEdited}
             editable={editable}
-            onEdit={(r, c, v) => editCell(r, c, v)}
+            onEdit={(r, c, v) => editCell(r, shownIdx[c], v)}
             onSelectRows={setSelectedRows}
             sort={sort}
             onHeaderClick={onHeaderClick}
             onDeleteRows={editable ? deleteRows : undefined}
-            onCellMenu={(row, col, x, y) => setCellMenu({ row, col, x, y })}
-            onOpenForeignKey={(row, col) => openRelated(row, col)}
+            onCellMenu={(row, col, x, y) => setCellMenu({ row, col: shownIdx[col], x, y })}
+            onHeaderMenu={(column, x, y) => setHeaderMenu({ column, x, y })}
+            onOpenForeignKey={(row, col) => openRelated(row, shownIdx[col])}
           />
         )}
 
@@ -444,7 +479,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
           </button>
           <button
             className="btn btn-ghost h-7 gap-1.5 px-2"
-            onClick={() => result && exportRows(tab.table, columns, Array.from({ length: loadedCount }, (_, r) => columns.map((_, c) => getValue(r, c))), toast)}
+            onClick={() => result && exportRows(tab.table, gridColumns, Array.from({ length: loadedCount }, (_, r) => shownIdx.map((c) => getValue(r, c))), toast)}
             disabled={!loadedCount}
             title="Export this page (CSV / JSON)"
           >
@@ -547,8 +582,22 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
             .filter((r) => r.toColumns[0] === columns[cellMenu.col].name)
             .map((r) => ({ label: `${r.from}.${r.fromColumns[0]}${r.guessed ? ' (guessed)' : ''}`, onOpen: () => openReferencing(cellMenu.row, r) }))}
           onSetNull={() => editCell(cellMenu.row, cellMenu.col, null)}
+          onHideColumn={shownIdx.length > 1 ? () => setHidden([...hidden, columns[cellMenu.col].name]) : undefined}
           onDeleteRow={() => deleteRows([cellMenu.row])}
           onClose={() => setCellMenu(null)}
+        />
+      )}
+
+      {headerMenu && (
+        <HeaderMenu
+          x={headerMenu.x}
+          y={headerMenu.y}
+          column={headerMenu.column}
+          canHide={shownIdx.length > 1}
+          onHide={() => setHidden([...hidden, headerMenu.column])}
+          onOnlyKeys={columnChoices.some((c) => c.key) ? onlyKeys : undefined}
+          onShowAll={hidden.length ? () => setHidden([]) : undefined}
+          onClose={() => setHeaderMenu(null)}
         />
       )}
 

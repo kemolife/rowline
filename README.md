@@ -58,6 +58,11 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
   the right-click menu can also open it in the same tab.
 - Filters without SQL: `+ Filter` adds a chip (column, operator, value — `=`, `contains`, `IN`, `BETWEEN`, `IS NULL`…),
   plus an ORDER BY chip. The `SQL` button switches to a raw `WHERE` box with autocomplete. Filters are kept with the tab.
+  The column and operator lists start with the ones you use most (per table). An unfinished filter is kept when you
+  click elsewhere or switch apps; `+ Filter` shows a dot and opens it again.
+- **Columns**: show only the columns you need. The *Columns* button has search, *Show all*, *Only keys* and
+  *Only these* (for a search); right-click a header or a cell to hide its column. Remembered per table; filters,
+  sort, the row panel and export still work (export takes the shown columns).
 - Edit cells in the grid or in the row panel; add and delete rows; undo / redo (`⌘Z` / `⌘⇧Z`).
 - `⌘S` shows the exact SQL first and applies all changes in one transaction.
 - **Virtual foreign keys**: Structure → *+ Virtual foreign key*, or *Save* on a guessed relation in the diagram.

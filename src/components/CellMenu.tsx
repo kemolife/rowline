@@ -20,10 +20,12 @@ interface Props {
   referencing?: { label: string; onOpen: () => void }[];
   onSetNull: () => void;
   onDeleteRow: () => void;
+  /** hide this column in the grid (undefined: it is the last one shown) */
+  onHideColumn?: () => void;
   onClose: () => void;
 }
 
-export default function CellMenu({ x, y, column, value, row, editable, foreignKey, onFilter, onOpenRelated, referencing = [], onSetNull, onDeleteRow, onClose }: Props) {
+export default function CellMenu({ x, y, column, value, row, editable, foreignKey, onFilter, onOpenRelated, referencing = [], onSetNull, onDeleteRow, onHideColumn, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, onClose);
   const related = foreignKey && value !== null;
@@ -43,13 +45,15 @@ export default function CellMenu({ x, y, column, value, row, editable, foreignKe
     [`Filter: ${column} ${value === null ? 'IS NULL' : '= value'}`, () => onFilter(ruleForValue(column, value))],
     [`Filter: ${column} ${value === null ? 'IS NOT NULL' : '≠ value'}`, () => onFilter(ruleForValue(column, value, true))],
     null,
+    [`Hide column ${column}`, () => onHideColumn?.(), !onHideColumn],
+    null,
     ['Set NULL', onSetNull, !editable || value === null],
     ['Delete row', onDeleteRow, !editable],
   ];
 
   // keep the menu inside the window
   const left = Math.min(x, window.innerWidth - 260);
-  const top = Math.max(8, Math.min(y, window.innerHeight - (related ? 330 : 260) - Math.min(refs.length, 10) * 30));
+  const top = Math.max(8, Math.min(y, window.innerHeight - (related ? 370 : 300) - Math.min(refs.length, 10) * 30));
 
   return createPortal(
     <div ref={ref} className="fade-in fixed z-50 w-60 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]" style={{ left, top }} data-testid="cell-menu">
