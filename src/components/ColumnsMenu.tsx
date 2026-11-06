@@ -1,6 +1,7 @@
 import { Columns3, Search } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { hideAllButOne } from '../lib/hiddenColumns';
 import { cx } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
 
@@ -44,6 +45,8 @@ export default function ColumnsMenu({ columns, hidden, onChange }: Props) {
   );
 }
 
+const chip = 'h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink';
+
 function ColumnsPopover({ x, y, columns, hidden, onChange, onClose }: Props & { x: number; y: number; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   // a list you work in: switching apps does not close it
@@ -54,7 +57,9 @@ function ColumnsPopover({ x, y, columns, hidden, onChange, onClose }: Props & { 
     const needle = q.trim().toLowerCase();
     return needle ? columns.filter((c) => c.name.toLowerCase().includes(needle)) : columns;
   }, [columns, q]);
+  const names = columns.map((c) => c.name);
   const keys = columns.filter((c) => c.key).map((c) => c.name);
+  const pk = columns.filter((c) => c.key === 'PK').map((c) => c.name);
   const width = 300;
 
   const toggle = (name: string) => {
@@ -82,32 +87,36 @@ function ColumnsPopover({ x, y, columns, hidden, onChange, onClose }: Props & { 
           <input className="field h-7 pl-8 text-[12.5px]" placeholder={`Find among ${columns.length} columns`} value={q} onChange={(e) => setQ(e.target.value)} autoFocus data-testid="columns-search" />
         </div>
         <div className="flex flex-wrap gap-1.5">
+          <button className={chip} onClick={() => onChange(hideAllButOne(names, pk))} title="Keep only the primary key, then tick the columns you need" data-testid="columns-hide-all">
+            Hide all
+          </button>
           {q.trim() ? (
             <>
-              <button className="h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink" onClick={() => setList(true)}>
-                Show these
-              </button>
-              <button className="h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink" onClick={() => setList(false)}>
-                Hide these
-              </button>
               <button
-                className="h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink"
+                className={chip}
                 onClick={() => {
-                  const names = new Set(list.map((c) => c.name));
-                  if (names.size) onChange(columns.filter((c) => !names.has(c.name)).map((c) => c.name));
+                  const keep = new Set([...list.map((c) => c.name), ...pk]);
+                  if (list.length) onChange(names.filter((n) => !keep.has(n)));
                 }}
+                title={pk.length ? `These and the primary key (${pk.join(', ')})` : 'Only these columns'}
                 data-testid="columns-only-these"
               >
                 Only these
               </button>
+              <button className={chip} onClick={() => setList(true)}>
+                Show these
+              </button>
+              <button className={chip} onClick={() => setList(false)}>
+                Hide these
+              </button>
             </>
           ) : (
             <>
-              <button className="h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink" onClick={() => onChange([])} data-testid="columns-show-all">
+              <button className={chip} onClick={() => onChange([])} data-testid="columns-show-all">
                 Show all
               </button>
               <button
-                className="h-6 rounded-md bg-surface-2 px-2 text-[12px] text-ink-2 hover:bg-surface-3 hover:text-ink disabled:opacity-40"
+                className={cx(chip, 'disabled:opacity-40')}
                 disabled={!keys.length}
                 onClick={() => onChange(columns.filter((c) => !c.key).map((c) => c.name))}
                 title="Primary key and foreign key columns"

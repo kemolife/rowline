@@ -41,3 +41,9 @@ export function visibleIndexes(names: string[], hidden: readonly string[]): numb
 export function hideAllButKeys(names: string[], keys: ReadonlySet<string>): string[] {
   return keys.size ? names.filter((n) => !keys.has(n)) : [];
 }
+
+/** "Hide all": the grid needs one column, so the first primary key (or the first column) stays */
+export function hideAllButOne(names: string[], primary: readonly string[]): string[] {
+  const keep = primary.find((p) => names.includes(p)) ?? names[0];
+  return names.filter((n) => n !== keep);
+}
