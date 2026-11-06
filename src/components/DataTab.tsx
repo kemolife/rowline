@@ -410,6 +410,12 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
               tables={session.objects.map((o) => o.name)}
               onAddVirtualKey={(k) => useSchema.getState().saveKey(id, database, { table: tab.table, ...k })}
               onDeleteVirtualKey={(keyId) => useSchema.getState().deleteKey(id, database, keyId)}
+              onOpenTable={(t) => openTable(t)}
+              onShowInData={(names) => {
+                const keep = new Set([...names, ...structure.columns.filter((c) => c.primaryKey).map((c) => c.name)]);
+                setHidden(structure.columns.filter((c) => !keep.has(c.name)).map((c) => c.name));
+                updateTab(tab.id, { view: 'data' });
+              }}
             />
           ) : (
             <CenteredState loading={!structureError} error={structureError} />
