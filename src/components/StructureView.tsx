@@ -1,5 +1,6 @@
 import { Check, Copy, KeyRound, Plus, Search, Table2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { enumValues } from '../lib/filters';
 import { filterStructure, type StructureFilter } from '../lib/structureFilter';
 import type { TableStructure } from '../lib/types';
 import { cx } from '../lib/ui';
@@ -146,8 +147,8 @@ export default function StructureView({
                         <CopyName name={c.name} />
                       </span>
                     </td>
-                    <td className="mono max-w-[240px] truncate pr-4 text-ink-2" title={c.dataType}>
-                      <Mark text={c.dataType} q={filter.q} />
+                    <td className="mono max-w-[380px] py-2 pr-4 text-ink-2">
+                      <TypeCell type={c.dataType} defaultValue={c.defaultValue} q={filter.q} />
                     </td>
                     <td className="pr-4 text-ink-2">{c.nullable ? 'YES' : <span className="text-ink-3">NO</span>}</td>
                     <td className="mono pr-4 text-ink-2">{c.defaultValue ?? <span className="text-[var(--null)]">NULL</span>}</td>
@@ -334,6 +335,42 @@ function Badge({ title, children }: { title: string; children: React.ReactNode }
   return (
     <span className="rounded bg-surface-2 px-1.5 py-px text-[10.5px] text-ink-2" title={title}>
       {children}
+    </span>
+  );
+}
+
+/** Column type; an ENUM or SET shows every value, the default one marked */
+function TypeCell({ type, defaultValue, q }: { type: string; defaultValue: string | null; q: string }) {
+  const [all, setAll] = useState(false);
+  const values = enumValues(type);
+  if (!values) return <Mark text={type} q={q} />;
+  const needle = q.trim().toLowerCase();
+  // long lists: the first values, the default and the searched ones; the rest on hover or click
+  const shown = all || values.length <= 10 ? values : values.filter((v, i) => i < 8 || v === defaultValue || (needle && v.toLowerCase().includes(needle)));
+  const rest = values.length - shown.length;
+  return (
+    <span className="flex flex-wrap items-center gap-1" title={type}>
+      <span className="mr-0.5">{/^\s*set/i.test(type) ? 'set' : 'enum'}</span>
+      {shown.map((v) => (
+        <span
+          key={v}
+          className={cx('rounded px-1.5 py-px text-[11px]', v === defaultValue ? 'bg-sel text-link' : 'bg-surface-2')}
+          title={v === defaultValue ? 'Default value' : v}
+          data-testid="enum-value"
+        >
+          {v === '' ? <span className="text-ink-3">empty</span> : <Mark text={v} q={q} />}
+        </span>
+      ))}
+      {rest > 0 && (
+        <button
+          className="rounded px-1.5 py-px text-[11px] text-link hover:bg-surface-2"
+          onClick={() => setAll(true)}
+          title={values.filter((v) => !shown.includes(v)).join(', ')}
+          data-testid="enum-more"
+        >
+          +{rest} more
+        </button>
+      )}
     </span>
   );
 }
