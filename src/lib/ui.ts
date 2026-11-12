@@ -14,6 +14,14 @@ export function formatCount(n: number): string {
   return n.toLocaleString('en-US');
 }
 
+/** 830540 → "830.5K", 43131938 → "43.1M": row counts in small places */
+export function shortCount(n: number): string {
+  if (n >= 1e9) return `${+(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${+(n / 1e3).toFixed(1)}K`;
+  return String(n);
+}
+
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Relation } from './diagram';
-import { aliasFor, joinSuggestions, lintStatement, maskSql, tableRefs, updatesAllRows } from './sqlAssist';
+import { aliasFor, aliasedTableUses, explainSqlError, joinSuggestions, lintStatement, maskSql, tableRefs, updatesAllRows } from './sqlAssist';
 
 const rel = (from: string, fromCol: string, to: string, toCol: string, extra: Partial<Relation> = {}): Relation => ({
   id: `${from}.${fromCol}`,
@@ -68,4 +68,28 @@ describe('SQL assist', () => {
     // without a schema only the WHERE check runs
     expect(lintStatement('SELECT * FROM nothing', new Map())).toEqual([]);
   });
+
+  it('catches the table name used after it got an alias, with a fix', () => {
+    const sql = 'SELECT r.ds_request_id FROM ds_request AS r LEFT JOIN automation_run_logs_v2 arlv ON arlv.lead_id = ds_request.ds_request_id';
+    const issues = aliasedTableUses(sql);
+    expect(issues).toHaveLength(1);
+    expect(sql.slice(issues[0].from, issues[0].to)).toBe('ds_request');
+    expect(issues[0].fix).toEqual({ label: 'Use r', insert: 'r' });
+    // the alias itself, other databases and strings are fine
+    expect(aliasedTableUses("SELECT r.x FROM ds_request r WHERE r.y = 'ds_request.z'")).toEqual([]);
+    expect(aliasedTableUses('SELECT shop.ds_request.x FROM ds_request r')).toEqual([]);
+    // no alias: fine
+    expect(aliasedTableUses('SELECT ds_request.x FROM ds_request')).toEqual([]);
+    // part of the normal warnings, even without a schema
+    expect(lintStatement(sql, new Map()).some((i) => i.fix)).toBe(true);
+  });
+
+  it('explains the MySQL error in plain words', () => {
+    const sql = 'SELECT * FROM ds_request AS r LEFT JOIN logs l ON l.lead_id = ds_request.ds_request_id';
+    expect(explainSqlError("ERROR 1054 (42S22): Unknown column 'ds_request.ds_request_id' in 'on clause'", sql)).toBe(
+      'In this query `ds_request` is called `r` (ds_request AS r). Write r.ds_request_id instead of ds_request.ds_request_id.',
+    );
+    expect(explainSqlError("Unknown column 'x.y' in 'field list'", sql)).toBeNull();
+  });
 });
+

@@ -73,6 +73,9 @@ pub struct ConnectionConfig {
     /// Folder Claude may read (Read, Grep, Glob only)
     #[serde(default)]
     pub project_folder: Option<String>,
+    /// Project the connection belongs to: groups connections in the list and the rail
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 impl ConnectionConfig {

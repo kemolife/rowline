@@ -62,7 +62,10 @@ export function tableRefs(sql: string): TableRef[] {
 
 /** `ds_person` → `dp`, `orders` → `o`; never an alias that is taken */
 export function aliasFor(table: string, taken: Set<string>): string {
-  const parts = table.toLowerCase().split(/[_\W]+/).filter(Boolean);
+  const parts = table
+    .toLowerCase()
+    .split(/[_\W]+/)
+    .filter(Boolean);
   const base = parts.map((p) => p[0]).join('') || 't';
   let a = base;
   for (let i = 2; taken.has(a) || KEYWORDS.has(a); i++) a = `${base}${i}`;
@@ -111,6 +114,35 @@ export interface SqlIssue {
   to: number;
   message: string;
   severity: 'warning' | 'error';
+  /** one-click fix: put `insert` in place of from..to */
+  fix?: { label: string; insert: string };
+}
+
+/**
+ * `ds_request.col` while the query calls the table `r` (`FROM ds_request AS r`): MySQL then only knows `r`,
+ * and fails with "Unknown column 'ds_request.col'". One issue per such use, with the alias as the fix.
+ */
+export function aliasedTableUses(sql: string): SqlIssue[] {
+  const text = maskSql(sql);
+  const refs = tableRefs(sql);
+  const aliasOf = new Map<string, string>();
+  for (const r of refs) if (r.alias.toLowerCase() !== r.table.toLowerCase()) aliasOf.set(r.table.toLowerCase(), r.alias);
+  // a table that is also used without an alias (joined twice) is fine
+  for (const r of refs) if (r.alias.toLowerCase() === r.table.toLowerCase()) aliasOf.delete(r.table.toLowerCase());
+  const known = new Set(refs.map((r) => r.alias.toLowerCase()));
+  const out: SqlIssue[] = [];
+  for (const m of text.matchAll(/(?<![\w$.`])([\w$]+)\.([\w$]+)\b(?!\s*\()/g)) {
+    const alias = aliasOf.get(m[1].toLowerCase());
+    if (!alias || known.has(m[1].toLowerCase())) continue;
+    out.push({
+      from: m.index!,
+      to: m.index! + m[1].length,
+      message: `${m[1]} is called ${alias} in this query (… ${m[1]} AS ${alias}); MySQL only knows ${alias}.${m[2]}`,
+      severity: 'error',
+      fix: { label: `Use ${alias}`, insert: alias },
+    });
+  }
+  return out;
 }
 
 /** Changes every row: UPDATE or DELETE without WHERE */
@@ -131,6 +163,7 @@ export function lintStatement(sql: string, schema: Map<string, Set<string>>): Sq
     const word = /^\w+/.exec(text.slice(lead))![0];
     issues.push({ from: lead, to: lead + word.length, message: `${word.toUpperCase()} without WHERE changes every row of the table.`, severity: 'warning' });
   }
+  issues.push(...aliasedTableUses(sql));
   if (!schema.size) return issues;
   // CTE names and derived tables are not real tables
   const ctes = new Set([...text.matchAll(/(?:\bwith|,)\s*([\w$]+)\s+as\s*\(/gi)].map((m) => m[1].toLowerCase()));
@@ -150,4 +183,15 @@ export function lintStatement(sql: string, schema: Map<string, Set<string>>): Sq
     issues.push({ from: at, to: at + m[2].length, message: `${table} has no column ${m[2]}`, severity: 'warning' });
   }
   return issues;
+}
+
+/** A plain-language hint for a database error, when Rowline can tell what went wrong */
+export function explainSqlError(message: string, sql: string): string | null {
+  // ERROR 1054: Unknown column 'ds_request.ds_request_id' in 'on clause'
+  const m = /Unknown column '([\w$]+)\.([\w$]+)'/i.exec(message);
+  if (m) {
+    const ref = tableRefs(sql).find((r) => r.table.toLowerCase() === m[1].toLowerCase() && r.alias.toLowerCase() !== r.table.toLowerCase());
+    if (ref) return `In this query \`${m[1]}\` is called \`${ref.alias}\` (${m[1]} AS ${ref.alias}). Write ${ref.alias}.${m[2]} instead of ${m[1]}.${m[2]}.`;
+  }
+  return null;
 }

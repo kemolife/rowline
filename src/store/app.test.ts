@@ -218,3 +218,62 @@ describe('theme', () => {
     unsub();
   });
 });
+
+describe('closing several tabs', () => {
+  beforeEach(async () => {
+    confirmAnswer.value = true;
+    useApp.setState({ connections: [conn('a')], workspaces: {}, openOrder: [], activeConnectionId: null, launcherOpen: false });
+    await useApp.getState().connect('a');
+    const s = useApp.getState();
+    for (const sql of ['q1', 'q2', 'q3', 'q4']) s.openQuery('a', sql);
+  });
+  const tabs = () => useApp.getState().workspaces.a.tabs;
+
+  it('closes others and keeps the right tab active', async () => {
+    const [t1, t2, t3, t4] = tabs().map((t) => t.id);
+    useApp.getState().setActiveTab('a', t3);
+    await useApp.getState().closeTabs('a', [t1, t2, t4]);
+    expect(tabs().map((t) => t.id)).toEqual([t3]);
+    expect(useApp.getState().workspaces.a.activeTabId).toBe(t3);
+  });
+
+  it('moves to the nearest tab on the left when the active one closes', async () => {
+    const [t1, t2, t3, t4] = tabs().map((t) => t.id);
+    useApp.getState().setActiveTab('a', t3);
+    await useApp.getState().closeTabs('a', [t3, t4]);
+    expect(tabs().map((t) => t.id)).toEqual([t1, t2]);
+    expect(useApp.getState().workspaces.a.activeTabId).toBe(t2);
+  });
+
+  it('asks once for unsaved changes and keeps everything when the answer is no', async () => {
+    const ids = tabs().map((t) => t.id);
+    useApp.getState().setDirty('a', ids[0], 2);
+    useApp.getState().setDirty('a', ids[1], 1);
+    confirmAnswer.value = false;
+    await useApp.getState().closeTabs('a', ids);
+    expect(tabs()).toHaveLength(4);
+    confirmAnswer.value = true;
+    await useApp.getState().closeTabs('a', ids);
+    expect(tabs()).toHaveLength(0);
+    expect(useApp.getState().workspaces.a.activeTabId).toBeNull();
+    expect(useApp.getState().workspaces.a.dirtyTabs).toEqual({});
+  });
+});
+
+describe('projects in the rail', () => {
+  it('opens a connection next to the open ones of its project', async () => {
+    useApp.setState({
+      connections: [
+        { ...conn('a1'), group: 'A' },
+        { ...conn('b1'), group: 'B' },
+        { ...conn('a2'), group: 'A' },
+      ],
+      workspaces: {},
+      openOrder: [],
+      activeConnectionId: null,
+    });
+    for (const id of ['a1', 'b1', 'a2']) await useApp.getState().connect(id);
+    expect(useApp.getState().openOrder).toEqual(['a1', 'a2', 'b1']);
+  });
+});
+

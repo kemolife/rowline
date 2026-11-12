@@ -1,12 +1,18 @@
 import { LogOut, Pencil, Plus, Type } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import { isTauri } from '../lib/api';
+import { projectColor } from '../lib/projects';
+import ProjectBadge from './ProjectBadge';
 import { ENV_LABEL, MOD, cx, envColor, isMac } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
-import { useApp } from '../store/app';
+import { useApp, useProjects } from '../store/app';
 
 export function initials(name: string) {
-  const words = name.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  const words = name
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
   if (!words.length) return '?';
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[1][0]).toUpperCase();
@@ -19,6 +25,7 @@ export default function ConnectionRail() {
   const activeId = useApp((s) => s.activeConnectionId);
   const launcherOpen = useApp((s) => s.launcherOpen);
   const connecting = useApp((s) => s.connecting);
+  const projects = useProjects();
   /** `rename` holds the text while the name is being edited in the menu */
   const [menu, setMenu] = useState<{ x: number; y: number; id: string; rename?: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -36,38 +43,63 @@ export default function ConnectionRail() {
   const item = 'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-surface-3';
 
   return (
-    <nav className="drag flex w-[52px] shrink-0 flex-col items-center gap-2 border-r border-line bg-bg pb-3" style={{ paddingTop: isTauri && isMac ? 44 : 10 }} data-tauri-drag-region data-testid="connection-rail">
+    <nav
+      className="drag flex w-[52px] shrink-0 flex-col items-center gap-2 border-r border-line bg-bg pb-3"
+      style={{ paddingTop: isTauri && isMac ? 44 : 10 }}
+      data-tauri-drag-region
+      data-testid="connection-rail"
+    >
       {openOrder.map((id, i) => {
         const c = configOf(id);
         if (!c || !workspaces[id]) return null;
         const color = envColor(c.environment);
         const active = id === activeId && !launcherOpen;
+        const info = projects.get(id) ?? null;
+        const project = info?.name ?? null;
+        const prev = i > 0 ? (projects.get(openOrder[i - 1])?.name ?? null) : undefined;
+        // a project's connections sit together under a small colored badge
+        const startsGroup = project !== prev;
         return (
-          <button
-            key={id}
-            className={cx('group no-drag relative flex h-9 w-9 items-center justify-center rounded-[10px] text-[12px] font-semibold transition-shadow', active && 'shadow-[0_0_0_2px_var(--accent)]')}
-            style={{ background: `color-mix(in srgb, ${color} ${active ? 22 : 14}%, transparent)`, color }}
-            onClick={() => useApp.getState().switchTo(id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY, id });
-            }}
-            aria-label={`Switch to ${c.name}`}
-            aria-current={active}
-            data-testid="rail-item"
-          >
-            {initials(c.name)}
-            {/* green dot: connected (every connection in the rail is open) */}
-            <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg bg-success" />
-            {/* name label on hover */}
-            <span className={cx('pointer-events-none absolute left-full top-1/2 z-50 ml-2.5 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink shadow-[var(--shadow)]', !menu && 'group-hover:block')}>
-              {c.name}
-              <span className="ml-1.5 font-normal text-ink-3">
-                {ENV_LABEL[c.environment]} · connected
-                {i < 9 ? ` · ${MOD}${i + 1}` : ''}
+          <div key={id} className="contents">
+            {startsGroup && i > 0 && <div className="h-px w-7 shrink-0 bg-line" />}
+            {startsGroup && info && <ProjectBadge project={info} className="no-drag h-4 min-w-6 px-1 text-[8.5px]" />}
+            <button
+              className={cx('group no-drag relative flex h-9 w-9 items-center justify-center rounded-[10px] text-[12px] font-semibold transition-shadow', active && 'shadow-[0_0_0_2px_var(--accent)]')}
+              style={{ background: `color-mix(in srgb, ${color} ${active ? 22 : 14}%, transparent)`, color }}
+              onClick={() => useApp.getState().switchTo(id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({ x: e.clientX, y: e.clientY, id });
+              }}
+              aria-label={`Switch to ${c.name}`}
+              aria-current={active}
+              data-testid="rail-item"
+            >
+              {initials(c.name)}
+              {/* project stripe on the left */}
+              {project && <span className={cx('absolute -left-[7px] top-1.5 bottom-1.5 w-[3px] rounded-full', info?.auto && 'opacity-50')} style={{ background: projectColor(project) }} />}
+              {/* green dot: connected (every connection in the rail is open) */}
+              <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-bg bg-success" />
+              {/* name label on hover */}
+              <span
+                className={cx(
+                  'pointer-events-none absolute left-full top-1/2 z-50 ml-2.5 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-[12px] font-medium text-ink shadow-[var(--shadow)]',
+                  !menu && 'group-hover:block',
+                )}
+              >
+                {project && (
+                  <span className="mr-1.5 font-semibold" style={{ color: projectColor(project) }}>
+                    {project} ·
+                  </span>
+                )}
+                {c.name}
+                <span className="ml-1.5 font-normal text-ink-3">
+                  {ENV_LABEL[c.environment]} · connected
+                  {i < 9 ? ` · ${MOD}${i + 1}` : ''}
+                </span>
               </span>
-            </span>
-          </button>
+            </button>
+          </div>
         );
       })}
       <button
@@ -81,7 +113,12 @@ export default function ConnectionRail() {
       </button>
 
       {menu && (
-        <div ref={menuRef} className="fade-in fixed z-50 w-56 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]" style={{ left: menu.x, top: menu.y }} data-testid="rail-menu">
+        <div
+          ref={menuRef}
+          className="fade-in fixed z-50 w-56 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]"
+          style={{ left: menu.x, top: menu.y }}
+          data-testid="rail-menu"
+        >
           {menu.rename !== undefined ? (
             <form
               className="flex gap-1 p-1"

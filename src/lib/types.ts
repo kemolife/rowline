@@ -28,6 +28,8 @@ export interface ConnectionConfig {
   claudeAccess?: ClaudeAccess | null;
   /** folder Claude may read */
   projectFolder?: string | null;
+  /** project the connection belongs to (groups connections in the list and the rail) */
+  group?: string | null;
 }
 
 export interface ConnectionInput extends ConnectionConfig {

@@ -54,6 +54,7 @@ fn save_connection(state: &AppState, input: ConnectionInput) -> AppResult<Connec
         Some(folder) => Some(project_folder(state.store.dir(), folder)?),
         None => None,
     };
+    config.group = config.group.as_deref().map(str::trim).filter(|g| !g.is_empty()).map(str::to_string);
     if config.id.is_empty() {
         config.id = uuid::Uuid::new_v4().to_string();
     }
@@ -104,6 +105,18 @@ fn resolve_password(state: &AppState, input: &ConnectionInput) -> AppResult<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connection_project_is_trimmed_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(crate::store::Store::new(dir.path().join("cfg"), crate::store::SecretStore::file(dir.path().join("s.json"))).unwrap());
+        let saved = dispatch(&state, "save_connection", json!({ "id": "", "name": "a", "engine": "sqlite", "filePath": "/tmp/a.sqlite", "group": "  2Solar  " })).await.unwrap();
+        assert_eq!(saved["group"], "2Solar");
+        let blank = dispatch(&state, "save_connection", json!({ "id": "", "name": "b", "engine": "sqlite", "filePath": "/tmp/b.sqlite", "group": " " })).await.unwrap();
+        assert_eq!(blank["group"], serde_json::Value::Null);
+        let list = dispatch(&state, "list_connections", json!({})).await.unwrap();
+        assert_eq!(list[0]["group"], "2Solar");
+    }
     use crate::commands::test_support::*;
 
     #[tokio::test]

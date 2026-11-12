@@ -41,6 +41,7 @@ export function useWsActions() {
       updateTab: (tabId: string, patch: Partial<TableTab> | Partial<QueryTab> | Partial<DiagramTab>) => s().updateTab(id, tabId, patch),
       openDiagram: (focus?: string) => s().openDiagram(id, focus),
       closeTab: (tabId: string) => s().closeTab(id, tabId),
+      closeTabs: (tabIds: string[]) => s().closeTabs(id, tabIds),
       setActiveTab: (tabId: string) => s().setActiveTab(id, tabId),
       setDirty: (tabId: string, count: number) => s().setDirty(id, tabId, count),
       selectDatabase: (db: string) => s().selectDatabase(id, db),
