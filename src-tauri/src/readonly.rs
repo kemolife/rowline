@@ -17,6 +17,14 @@ const WRITE_WORDS: &[&str] = &[
     "LOAD_FILE",
 ];
 
+/// Functions that do something besides reading: named locks stay on the (pooled) connection after the
+/// rollback and can block the application; sleeping and benchmarking only hold a connection and the server.
+const BLOCKED_FUNCTIONS: &[&str] = &["GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS", "IS_FREE_LOCK", "IS_USED_LOCK", "SLEEP", "BENCHMARK"];
+
+fn blocked_function(name: &str) -> AppError {
+    AppError::msg(format!("{name}() is not allowed: lock, sleep and benchmark functions are refused in read-only queries."))
+}
+
 fn not_read_only() -> AppError {
     AppError::msg("Only read-only queries are allowed (SELECT, SHOW, EXPLAIN, WITH … SELECT).")
 }
@@ -98,6 +106,9 @@ pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
     let pragma_read = dialect == Dialect::Sqlite && first == "PRAGMA" && is_pragma_read(&masked);
     if !(sqlgen::is_read_only_statement(&text) || pragma_read) {
         return Err(not_read_only());
+    }
+    if let Some((name, _)) = words.iter().find(|(w, paren)| *paren && BLOCKED_FUNCTIONS.contains(&w.as_str())) {
+        return Err(blocked_function(name));
     }
     if first != "SHOW" {
         let writes = words.iter().any(|(w, paren)| match w.as_str() {
@@ -337,6 +348,28 @@ mod tests {
         assert!(check("SELECT LOAD_FILE('/etc/passwd')", Mysql).is_err());
         assert!(check("select load_file ('/etc/passwd') as f", Mysql).is_err());
         assert!(check("SELECT 'load_file' AS note", Mysql).is_ok(), "only the function, not text");
+    }
+
+    #[test]
+    fn rejects_lock_sleep_and_benchmark_functions() {
+        for sql in [
+            "SELECT GET_LOCK('deploy', 0)",
+            "select get_lock ('deploy', 10) AS l",
+            "SELECT RELEASE_LOCK('deploy')",
+            "SELECT RELEASE_ALL_LOCKS()",
+            "SELECT IS_USED_LOCK('x'), IS_FREE_LOCK('x')",
+            "SELECT SLEEP(60)",
+            "SELECT * FROM t WHERE id = 1 AND SLEEP(5) = 0",
+            "SELECT BENCHMARK(100000000, MD5('x'))",
+            "SELECT 1 /*!50000 , SLEEP(30) */",
+        ] {
+            assert!(check(sql, Mysql).is_err(), "should reject: {sql}");
+        }
+        assert!(check("SELECT SLEEP(1)", Mysql).unwrap_err().to_string().contains("SLEEP() is not allowed"));
+        // names as text, columns or aliases are fine
+        for sql in ["SELECT 'sleep(5)' AS note", "SELECT sleep_minutes, benchmark FROM t", "SELECT get_lock_count FROM t", "SELECT `sleep` FROM t"] {
+            assert!(check(sql, Mysql).is_ok(), "should accept: {sql}");
+        }
     }
 
     #[test]

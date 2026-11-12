@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 mod chat;
+mod cli;
 mod connections;
 mod data;
 mod files;
@@ -68,6 +69,8 @@ pub async fn dispatch(state: &AppState, command: &str, args: Value) -> AppResult
         chat::run(state, command, args).await
     } else if schema::COMMANDS.contains(&command) {
         schema::run(state, command, args).await
+    } else if cli::COMMANDS.contains(&command) {
+        cli::run(state, command, args).await
     } else if command == "ping" {
         ok(json!({ "ok": true }))
     } else {
@@ -82,7 +85,7 @@ mod tests {
     /// Every command a domain lists is really handled there (no "Unknown command"), and no name is in two domains.
     #[tokio::test]
     async fn every_listed_command_is_routed() {
-        let all: Vec<&str> = [connections::COMMANDS, data::COMMANDS, queries::COMMANDS, jobs::COMMANDS, files::COMMANDS, chat::COMMANDS, schema::COMMANDS].concat();
+        let all: Vec<&str> = [connections::COMMANDS, data::COMMANDS, queries::COMMANDS, jobs::COMMANDS, files::COMMANDS, chat::COMMANDS, schema::COMMANDS, cli::COMMANDS].concat();
         let mut sorted = all.clone();
         sorted.sort();
         sorted.dedup();

@@ -1,4 +1,5 @@
-import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, Sun, SunMoon, Trash2 } from 'lucide-react';
+import { installCli } from '../lib/cliInstall';
+import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useDismiss } from '../lib/useDismiss';
 import { confirmDialog } from '../lib/api';
@@ -213,6 +214,10 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
       </div>
       <div className="flex h-10 shrink-0 items-center justify-between border-t border-line px-4 text-[11.5px] text-ink-3">
         <span>MySQL · SQLite</span>
+        <div className="flex-1" />
+        <button className="btn btn-ghost h-7" onClick={installCli} title="Put the rowline command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
+          <Terminal size={14} /> Command line
+        </button>
         <button className="btn btn-ghost h-7" onClick={() => setTheme(nextTheme)} title={`Theme: ${theme}`}>
           <ThemeIcon size={14} /> {theme === 'system' ? 'System' : theme === 'light' ? 'Light' : 'Dark'}
         </button>

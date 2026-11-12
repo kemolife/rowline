@@ -34,6 +34,12 @@ async fn main() {
     let state = Arc::new(AppState::new(store));
     let mcp = rowline_lib::claude::mcp::start(state.clone()).await.expect("mcp server");
     println!("Claude tools (MCP) on 127.0.0.1:{}", mcp.port);
+    // its own socket, so it never takes the app's place: ROWLINE_SOCKET=<this path> rowline …
+    let socket = std::env::var_os("ROWLINE_SOCKET").map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("rowline.sock"));
+    match rowline_lib::cli::server::start(state.clone(), socket.clone()).await {
+        Ok(()) => println!("rowline command socket: {}", socket.display()),
+        Err(e) => println!("rowline command unavailable: {e}"),
+    }
     let app = Router::new()
         .route("/api/call", post(call))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))

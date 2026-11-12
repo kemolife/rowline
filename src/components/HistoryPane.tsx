@@ -66,16 +66,23 @@ export default function HistoryPane() {
               key={h.id}
               className="block w-full rounded-md px-2 py-1.5 text-left hover:bg-surface-2"
               onClick={() => openQuery(h.sql, { database: h.database })}
-              title={h.sql}
+              title={h.error ? `${h.sql}\n\n${h.error}` : h.sql}
               data-testid="history-entry"
             >
               <div className="mono truncate text-[11.5px] text-ink">{firstLine(h.sql)}</div>
               <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-3">
                 <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full', h.ok ? 'bg-[var(--success)]' : 'bg-[var(--danger)]')} />
+                {h.source === 'cli' && (
+                  <span className="rounded bg-surface-3 px-1 text-[9.5px] font-bold tracking-wide text-ink-2" title="Run by an agent with the rowline command (read-only)">
+                    CLI
+                  </span>
+                )}
                 <span>{historyTime(h.executedAt)}</span>
                 <span>· {h.elapsedMs} ms</span>
+                {h.rows != null && <span>· {h.rows} row{h.rows === 1 ? '' : 's'}</span>}
                 {h.database && <span className="truncate">· {h.database}</span>}
               </div>
+              {h.error?.startsWith('Blocked:') && <div className="mt-0.5 truncate text-[11px] text-danger">{h.error}</div>}
             </button>
           ))
         )}

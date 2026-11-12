@@ -4,6 +4,7 @@ vi.mock('../lib/api', () => ({
   isTauri: false,
   api: {
     connect: vi.fn(async () => ({ version: 'v', currentDatabase: null })),
+    setActiveDatabase: vi.fn(async () => true),
     listObjects: vi.fn(async () => []),
     listSavedQueries: vi.fn(async () => []),
     saveQuery: vi.fn(async (q: Record<string, unknown>) => ({ id: q.id || 'new-id', updatedAt: 'now', database: null, ...q })),

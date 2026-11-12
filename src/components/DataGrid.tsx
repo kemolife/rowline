@@ -37,6 +37,8 @@ export interface DataGridProps {
   onDeleteRows?: (rows: number[]) => void;
   /** Right click on a cell; x/y are window coordinates */
   onCellMenu?: (row: number, col: number, x: number, y: number) => void;
+  /** Right click on a column header; x/y are window coordinates */
+  onHeaderMenu?: (column: string, x: number, y: number) => void;
   /** click on the ↗ of a foreign key cell, or ⌘-click anywhere in it */
   onOpenForeignKey?: (row: number, col: number) => void;
 }
@@ -163,7 +165,7 @@ function fkArrowX(rect: { x: number; width: number }, alignRight: boolean, value
 }
 
 const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataGrid(props, ref) {
-  const { columns, meta, rowCount, getValue, getRowState, isCellEdited, editable, onEdit, onSelectRows, sort, onHeaderClick, onDeleteRows, onCellMenu, onOpenForeignKey } = props;
+  const { columns, meta, rowCount, getValue, getRowState, isCellEdited, editable, onEdit, onSelectRows, sort, onHeaderClick, onDeleteRows, onCellMenu, onHeaderMenu, onOpenForeignKey } = props;
   const themeKey = useThemeKey();
   const { theme, palette } = useGridTheme(themeKey);
   const [widths, setWidths] = useState<Record<string, number>>({});
@@ -478,6 +480,11 @@ const DataGrid = forwardRef<DataGridHandle, DataGridProps>(function DataGrid(pro
         onItemHovered={(e) => {
           const key = e.kind === 'cell' && onFkButton(e.location[0], e.location[1], e.localEventX, e.bounds.width) ? `${e.location[0]},${e.location[1]}` : null;
           setFkHover((cur) => (cur === key ? cur : key));
+        }}
+        onHeaderContextMenu={(col, e) => {
+          if (!onHeaderMenu || col < 0 || !columns[col]) return;
+          e.preventDefault();
+          onHeaderMenu(columns[col].name, e.bounds.x + e.localEventX, e.bounds.y + e.localEventY);
         }}
         onCellContextMenu={([col, row], e) => {
           if (!onCellMenu || col < 0) return;

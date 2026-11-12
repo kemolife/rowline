@@ -303,4 +303,13 @@ pub struct HistoryEntry {
     pub executed_at: chrono::DateTime<chrono::Utc>,
     pub elapsed_ms: u64,
     pub ok: bool,
+    /// "cli" for queries an agent ran with the `rowline` command; none for the app itself
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// why it failed or was blocked (CLI)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// rows returned (CLI)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<usize>,
 }
