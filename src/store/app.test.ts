@@ -230,6 +230,16 @@ describe('closing several tabs', () => {
   });
   const tabs = () => useApp.getState().workspaces.a.tabs;
 
+  it('moves a tab to another place', () => {
+    const [t1, t2, t3, t4] = tabs().map((t) => t.id);
+    useApp.getState().moveTab('a', t1, 2);
+    expect(tabs().map((t) => t.id)).toEqual([t2, t3, t1, t4]);
+    useApp.getState().moveTab('a', t4, 0);
+    expect(tabs().map((t) => t.id)).toEqual([t4, t2, t3, t1]);
+    useApp.getState().moveTab('a', t2, 99);
+    expect(tabs().map((t) => t.id)).toEqual([t4, t3, t1, t2]);
+  });
+
   it('closes others and keeps the right tab active', async () => {
     const [t1, t2, t3, t4] = tabs().map((t) => t.id);
     useApp.getState().setActiveTab('a', t3);

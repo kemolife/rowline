@@ -9,18 +9,45 @@ export default function TabBar() {
   const tabs = useWs((w) => w.tabs);
   const activeTabId = useWs((w) => w.activeTabId);
   const dirty = useWs((w) => w.dirtyTabs);
-  const { setActiveTab, closeTab, closeTabs, openQuery } = useWsActions();
+  const { setActiveTab, closeTab, closeTabs, openQuery, moveTab } = useWsActions();
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   useDismiss(menuRef, closeMenu, !!menu);
+  const bar = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+
+  // drag a tab sideways to move it; mouse events, because the window's file drop handler takes HTML drag and drop
+  const startDrag = (id: string, startX: number) => {
+    let moved = false;
+    const onMove = (e: MouseEvent) => {
+      if (!moved && Math.abs(e.clientX - startX) < 5) return;
+      moved = true;
+      setDragging(id);
+      const el = bar.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (e.clientX < r.left + 24) el.scrollLeft -= 12;
+      else if (e.clientX > r.right - 24) el.scrollLeft += 12;
+      const others = [...el.querySelectorAll<HTMLElement>('[data-testid=tab]')].filter((t) => t.dataset.tabId !== id);
+      moveTab(id, others.filter((t) => t.getBoundingClientRect().left + t.offsetWidth / 2 < e.clientX).length);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      setDragging(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   return (
-    <div className="flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-line bg-bg px-1.5">
+    <div ref={bar} className={cx('flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-line bg-bg px-1.5', dragging && 'cursor-grabbing select-none')}>
       {tabs.map((t) => {
         const active = t.id === activeTabId;
         const Icon = t.kind === 'query' ? Code2 : t.kind === 'diagram' ? Network : t.objectKind === 'view' ? Eye : Table2;
         const title = t.kind === 'query' ? t.title : t.kind === 'diagram' ? `Relations${t.database ? ` · ${t.database}` : ''}` : t.table;
+        const hint = t.kind === 'table' && t.database ? `${t.database}.${t.table}` : title;
         const unsaved = (dirty[t.id] ?? 0) > 0;
         return (
           <div
@@ -28,9 +55,12 @@ export default function TabBar() {
             role="tab"
             aria-selected={active}
             data-testid="tab"
+            data-tab-id={t.id}
+            title={hint}
             className={cx(
               'group relative flex h-[30px] min-w-[120px] max-w-[220px] cursor-default items-center gap-2 rounded-t-lg border border-b-0 px-3 text-[12.5px]',
               active ? 'border-line bg-surface text-ink' : 'border-transparent text-ink-2 hover:bg-surface-2/70',
+              dragging === t.id && 'opacity-70 shadow-[var(--shadow)]',
             )}
             onContextMenu={(e) => {
               e.preventDefault();
@@ -41,7 +71,10 @@ export default function TabBar() {
               if (e.button === 1) {
                 e.preventDefault();
                 closeTab(t.id);
-              } else setActiveTab(t.id);
+              } else {
+                setActiveTab(t.id);
+                startDrag(t.id, e.clientX);
+              }
             }}
           >
             {active && <span className="absolute inset-x-0 -bottom-px h-px bg-surface" />}
