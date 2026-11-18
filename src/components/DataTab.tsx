@@ -57,6 +57,8 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
+  // rows in the whole table while a filter is on (counted once per table and filter switch)
+  const [tableTotal, setTableTotal] = useState<{ key: string; n: number } | null>(null);
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(300);
   // filters and sort live on the tab (restored with it; a foreign key jump opens a tab with a filter)
@@ -109,11 +111,18 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
         .countRows(id, request)
         .then((n) => seq === loadSeq.current && setTotal(n))
         .catch(() => undefined);
+      const key = `${id}/${database ?? ''}/${tab.table}`;
+      if (filter && tableTotal?.key !== key)
+        api
+          .countRows(id, { ...request, filter: null })
+          .then((n) => setTableTotal({ key, n }))
+          .catch(() => undefined);
     } catch (e) {
       if (seq === loadSeq.current) setError((e as Error).message);
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tableTotal only skips a repeated count
   }, [id, database, tab.table, filter, sort, limit, offset]);
 
   useEffect(() => {
@@ -509,6 +518,20 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
           <div className="flex-1" />
 
+          {result && (
+            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[12px] tabular-nums text-ink-2 max-lg:hidden" data-testid="row-count">
+              {total == null ? (
+                <span className="text-ink-3">Counting rows…</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-ink">{formatCount(total)}</span> {total === 1 ? 'row' : 'rows'}
+                  {filter && tableTotal?.key === tableKey && <span className="text-ink-3"> of {formatCount(tableTotal.n)} in table</span>}
+                </>
+              )}
+              {validSelected.length > 0 && <span className="text-ink-3"> · {formatCount(validSelected.length)} selected</span>}
+            </span>
+          )}
+
           {pending > 0 && (
             <div className="fade-in mr-2 flex shrink-0 items-center gap-1.5" data-testid="pending-bar">
               <span className="mr-1 whitespace-nowrap text-[12px] text-ink-2">
@@ -624,7 +647,7 @@ function Toolbar({ children }: { children: React.ReactNode }) {
 }
 
 function BottomBar({ children }: { children: React.ReactNode }) {
-  return <div className="flex h-10 shrink-0 items-center gap-1 overflow-hidden border-t border-line bg-bg px-2">{children}</div>;
+  return <div className="relative flex h-10 shrink-0 items-center gap-1 overflow-hidden border-t border-line bg-bg px-2">{children}</div>;
 }
 
 function ViewSwitch({ view, onChange }: { view: 'data' | 'structure'; onChange: (v: 'data' | 'structure') => void }) {
