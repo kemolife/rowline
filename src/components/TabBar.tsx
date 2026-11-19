@@ -15,40 +15,55 @@ export default function TabBar() {
   const closeMenu = useCallback(() => setMenu(null), []);
   useDismiss(menuRef, closeMenu, !!menu);
   const bar = useRef<HTMLDivElement>(null);
-  const [dragging, setDragging] = useState<string | null>(null);
+  // the tab being dragged: it follows the mouse (dx), the tabs it passes slide aside, the order is saved on drop
+  const [drag, setDrag] = useState<{ id: string; from: number; to: number; dx: number; shift: number } | null>(null);
 
   // drag a tab sideways to move it; mouse events, because the window's file drop handler takes HTML drag and drop
   const startDrag = (id: string, startX: number) => {
+    const el = bar.current;
+    if (!el) return;
+    // slots measured once at the start, in the bar's scroll coordinates
+    const slots = [...el.querySelectorAll<HTMLElement>('[data-testid=tab]')].map((t) => ({ left: t.offsetLeft, width: t.offsetWidth }));
+    const from = tabs.findIndex((t) => t.id === id);
+    if (from < 0 || !slots[from]) return;
+    const me = slots[from];
+    const shift = me.width + (slots[1] ? Math.abs(slots[1].left - slots[0].left - slots[0].width) : 0);
+    const startScroll = el.scrollLeft;
     let moved = false;
+    let to = from;
     const onMove = (e: MouseEvent) => {
       if (!moved && Math.abs(e.clientX - startX) < 5) return;
       moved = true;
-      setDragging(id);
-      const el = bar.current;
-      if (!el) return;
       const r = el.getBoundingClientRect();
       if (e.clientX < r.left + 24) el.scrollLeft -= 12;
       else if (e.clientX > r.right - 24) el.scrollLeft += 12;
-      const others = [...el.querySelectorAll<HTMLElement>('[data-testid=tab]')].filter((t) => t.dataset.tabId !== id);
-      moveTab(id, others.filter((t) => t.getBoundingClientRect().left + t.offsetWidth / 2 < e.clientX).length);
+      const last = slots[slots.length - 1];
+      const raw = e.clientX - startX + el.scrollLeft - startScroll;
+      const dx = Math.max(slots[0].left - me.left, Math.min(last.left + last.width - me.left - me.width, raw));
+      const center = me.left + me.width / 2 + dx;
+      to = slots.filter((s, i) => i !== from && s.left + s.width / 2 < center).length;
+      setDrag({ id, from, to, dx, shift });
     };
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      setDragging(null);
+      if (moved && to !== from) moveTab(id, to);
+      setDrag(null);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
 
   return (
-    <div ref={bar} className={cx('flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-line bg-bg px-1.5', dragging && 'cursor-grabbing select-none')}>
-      {tabs.map((t) => {
+    <div ref={bar} className={cx('relative flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-line bg-bg px-1.5', drag && 'cursor-grabbing select-none')}>
+      {tabs.map((t, i) => {
         const active = t.id === activeTabId;
         const Icon = t.kind === 'query' ? Code2 : t.kind === 'diagram' ? Network : t.objectKind === 'view' ? Eye : Table2;
         const title = t.kind === 'query' ? t.title : t.kind === 'diagram' ? `Relations${t.database ? ` · ${t.database}` : ''}` : t.table;
         const hint = t.kind === 'table' && t.database ? `${t.database}.${t.table}` : title;
         const unsaved = (dirty[t.id] ?? 0) > 0;
+        const dragged = drag?.id === t.id;
+        const offset = !drag || dragged ? 0 : drag.from < drag.to && i > drag.from && i <= drag.to ? -drag.shift : drag.to < drag.from && i >= drag.to && i < drag.from ? drag.shift : 0;
         return (
           <div
             key={t.id}
@@ -60,8 +75,9 @@ export default function TabBar() {
             className={cx(
               'group relative flex h-[30px] min-w-[120px] max-w-[220px] cursor-default items-center gap-2 rounded-t-lg border border-b-0 px-3 text-[12.5px]',
               active ? 'border-line bg-surface text-ink' : 'border-transparent text-ink-2 hover:bg-surface-2/70',
-              dragging === t.id && 'opacity-70 shadow-[var(--shadow)]',
+              dragged && 'z-10 border-line-strong bg-surface-2 text-ink shadow-[var(--shadow)]',
             )}
+            style={drag ? { transform: `translateX(${dragged ? drag.dx : offset}px)`, transition: dragged ? 'none' : 'transform 150ms ease' } : undefined}
             onContextMenu={(e) => {
               e.preventDefault();
               setMenu({ x: e.clientX, y: e.clientY, id: t.id });
