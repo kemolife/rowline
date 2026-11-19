@@ -57,6 +57,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState<number | null>(null);
+  const [counting, setCounting] = useState(false);
   // rows in the whole table while a filter is on (counted once per table and filter switch)
   const [tableTotal, setTableTotal] = useState<{ key: string; n: number } | null>(null);
   const [offset, setOffset] = useState(0);
@@ -107,10 +108,12 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       gridRef.current?.clearSelection();
       // total in the background; large tables can take a moment
       setTotal(null);
+      setCounting(true);
       api
         .countRows(id, request)
         .then((n) => seq === loadSeq.current && setTotal(n))
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(() => seq === loadSeq.current && setCounting(false));
       const key = `${id}/${database ?? ''}/${tab.table}`;
       if (filter && tableTotal?.key !== key)
         api
@@ -293,6 +296,16 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     setHistory(emptyHistory());
   };
 
+  // stops the page load and the row counts (KILL QUERY on the server); the grid keeps no half result
+  const cancel = async () => {
+    const wasLoading = loading;
+    loadSeq.current++;
+    setLoading(false);
+    setCounting(false);
+    if (wasLoading) setError('Cancelled. The rows were not loaded.');
+    await api.cancelQuery(id).catch(() => undefined);
+  };
+
   const refresh = async () => {
     if (pending && !(await confirmDialog('Refreshing discards unsaved changes. Continue?'))) return;
     setHistory(emptyHistory());
@@ -308,6 +321,9 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       if (matchKey(e, 'mod+s')) {
         e.preventDefault();
         startSave();
+      } else if (matchKey(e, 'mod+.') || (loading && !typing && e.key === 'Escape')) {
+        e.preventDefault();
+        cancel();
       } else if (matchKey(e, 'mod+r')) {
         e.preventDefault();
         refresh();
@@ -395,9 +411,15 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
   const toolbarEnd = (
     <>
-      <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={refresh} title={`Reload the data (${MOD}R)`} data-testid="refresh">
-        {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
-      </button>
+      {loading ? (
+        <button className="btn h-7 gap-1.5 px-2" onClick={cancel} title={`Stop loading (Esc or ${MOD}.)`} data-testid="cancel-load">
+          <Loader2 size={13} className="animate-spin" /> Cancel
+        </button>
+      ) : (
+        <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={refresh} title={`Reload the data (${MOD}R)`} data-testid="refresh">
+          <RefreshCw size={13} /> Refresh
+        </button>
+      )}
       {result && <ColumnsMenu columns={columnChoices} hidden={hidden} onChange={setHidden} />}
       <button className={cx('btn btn-ghost h-7 gap-1.5 px-2', rowPanelOpen && 'bg-surface-2 text-ink')} onClick={toggleRowPanel} title="Show or hide all fields of the selected row" aria-label="Toggle row details">
         <PanelRight size={13} /> Row details
@@ -518,10 +540,22 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
           <div className="flex-1" />
 
-          {result && (
+          {result && !error && (
             <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[12px] tabular-nums text-ink-2 max-lg:hidden" data-testid="row-count">
               {total == null ? (
-                <span className="text-ink-3">Counting rows…</span>
+                counting ? (
+                  <span className="text-ink-3">
+                    Counting rows…{' '}
+                    <button className="pointer-events-auto underline-offset-2 hover:text-ink hover:underline" onClick={cancel} data-testid="cancel-count">
+                      Stop
+                    </button>
+                  </span>
+                ) : (
+                  <span className="text-ink-3">
+                    {formatCount(loadedCount)}
+                    {result.truncated ? '+' : ''} rows · not counted
+                  </span>
+                )
               ) : (
                 <>
                   <span className="font-semibold text-ink">{formatCount(total)}</span> {total === 1 ? 'row' : 'rows'}
