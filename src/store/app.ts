@@ -137,6 +137,8 @@ export interface AppState {
   closeTab: (cid: string, tabId: string) => Promise<void>;
   /** Closes several tabs; asks once when some of them have unsaved changes */
   closeTabs: (cid: string, tabIds: string[]) => Promise<void>;
+  /** Moves a tab to a new place in the tab bar (index among the other tabs) */
+  moveTab: (cid: string, tabId: string, toIndex: number) => void;
   setActiveTab: (cid: string, tabId: string) => void;
   setDirty: (cid: string, tabId: string, count: number) => void;
   toggleSidebar: () => void;
@@ -446,6 +448,16 @@ export const useApp = create<AppState>((set, get) => {
     },
 
     updateTab: (cid, id, patch) => patchWs(cid, (w) => ({ tabs: w.tabs.map((t) => (t.id === id ? ({ ...t, ...patch } as Tab) : t)) })),
+
+    moveTab: (cid, id, to) =>
+      patchWs(cid, (w) => {
+        const tab = w.tabs.find((t) => t.id === id);
+        if (!tab) return {};
+        const rest = w.tabs.filter((t) => t.id !== id);
+        const at = Math.max(0, Math.min(to, rest.length));
+        if (w.tabs[at] === tab) return {};
+        return { tabs: [...rest.slice(0, at), tab, ...rest.slice(at)] };
+      }),
 
     closeTabs: async (cid, ids) => {
       const w = get().workspaces[cid];

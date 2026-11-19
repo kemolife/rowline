@@ -42,6 +42,7 @@ export function useWsActions() {
       openDiagram: (focus?: string) => s().openDiagram(id, focus),
       closeTab: (tabId: string) => s().closeTab(id, tabId),
       closeTabs: (tabIds: string[]) => s().closeTabs(id, tabIds),
+      moveTab: (tabId: string, toIndex: number) => s().moveTab(id, tabId, toIndex),
       setActiveTab: (tabId: string) => s().setActiveTab(id, tabId),
       setDirty: (tabId: string, count: number) => s().setDirty(id, tabId, count),
       selectDatabase: (db: string) => s().selectDatabase(id, db),

@@ -38,7 +38,9 @@ impl MysqlSession {
         req.database = self.db(req.database.as_deref()).map(str::to_string);
         let sql = sqlgen::count_sql(Dialect::Mysql, &req);
         let mut c = self.conn().await?;
-        let n: Option<u64> = c.query_first(sql).await?;
+        // tracked, so Cancel stops a slow count on a big table too
+        let id = c.id();
+        let n: Option<u64> = self.tracked(id, c.query_first(sql)).await?;
         Ok(n.unwrap_or(0))
     }
 
@@ -117,12 +119,19 @@ impl MysqlSession {
 
     async fn run_tracked(&self, c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
         let id = c.id();
+        self.tracked(id, run_query(c, sql, max_rows)).await
+    }
+
+    /// Runs `work` with server thread `id` in `running`, so cancel() can KILL QUERY it.
+    async fn tracked<T>(&self, id: u32, work: impl std::future::Future<Output = T>) -> T {
         if let Ok(mut r) = self.running.lock() {
             r.push(id);
         }
-        let res = run_query(c, sql, max_rows).await;
+        let res = work.await;
         if let Ok(mut r) = self.running.lock() {
-            r.retain(|x| *x != id);
+            if let Some(i) = r.iter().position(|x| *x == id) {
+                r.remove(i);
+            }
         }
         res
     }
@@ -280,5 +289,26 @@ mod tests {
         if let Ok(r) = res {
             assert_eq!(r[0].rows[0][0], json!(1));
         }
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_a_slow_count_too() {
+        let Some((s, db)) = session().await else { return };
+        let t = "rowline_test_slow_count";
+        s.execute(Some(&db), &format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id INT PRIMARY KEY); INSERT INTO {t} VALUES (1)"), 1).await.unwrap();
+        // without a filter the count is quick and exact
+        let req = |filter: Option<&str>| PageRequest { database: Some(db.clone()), table: t.into(), filter: filter.map(str::to_string), sort: vec![], limit: 1, offset: 0 };
+        assert_eq!(s.count(req(None)).await.unwrap(), 1);
+
+        let s = std::sync::Arc::new(s);
+        let s2 = s.clone();
+        let slow = req(Some("SLEEP(20) = 0"));
+        let handle = tokio::spawn(async move { s2.count(slow).await });
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let start = Instant::now();
+        s.cancel().await.unwrap();
+        let _ = handle.await.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5), "cancel did not stop the count");
+        s.execute(Some(&db), &format!("DROP TABLE {t}"), 1).await.unwrap();
     }
 }
