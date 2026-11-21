@@ -73,7 +73,7 @@ impl MysqlSession {
         let thread_id = c.id();
         // Untracked on purpose: dropping run_tracked on timeout would leave this thread id in `running`,
         // and a later editor cancel() would then KILL QUERY an unrelated query on the pooled connection.
-        let res = match tokio::time::timeout(timeout + std::time::Duration::from_secs(2), run_query(&mut c, sql, max_rows)).await {
+        let res = match tokio::time::timeout(timeout + std::time::Duration::from_secs(2), run_query(&mut c, sql, max_rows, Some(self))).await {
             // 3024 = MAX_EXECUTION_TIME reached: same message as the other timeout paths
             Ok(Err(AppError::Mysql(mysql_async::Error::Server(e)))) if e.code == 3024 => {
                 Err(AppError::Timeout(format!("the query ran longer than {} s", timeout.as_secs())))
@@ -121,7 +121,7 @@ impl MysqlSession {
 
     async fn run_tracked(&self, c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
         let id = c.id();
-        self.tracked(id, run_query(c, sql, max_rows)).await
+        self.tracked(id, run_query(c, sql, max_rows, Some(self))).await
     }
 
     /// Runs `work` with server thread `id` in `running`, so cancel() can KILL QUERY it.
@@ -139,8 +139,11 @@ impl MysqlSession {
     }
 }
 
-async fn run_query(c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
+/// Runs one statement and reads at most `max_rows` rows. With `killer`, a result that is longer is stopped
+/// on the server (KILL QUERY from a second connection) instead of being read to the end and thrown away.
+async fn run_query(c: &mut Conn, sql: &str, max_rows: usize, killer: Option<&MysqlSession>) -> AppResult<QueryResult> {
     let start = Instant::now();
+    let thread_id = c.id();
     let mut qr = c.query_iter(sql).await?;
     let cols: Vec<Column> = qr.columns_ref().to_vec();
     if cols.is_empty() {
@@ -154,15 +157,24 @@ async fn run_query(c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryR
         .collect();
     let mut rows = Vec::new();
     let mut truncated = false;
-    qr.for_each(|row: Row| {
+    while let Some(row) = qr.next().await? {
         if rows.len() >= max_rows {
             truncated = true;
-            return;
+            break;
         }
+        let row: Row = row;
         let values = row.unwrap();
         rows.push(values.iter().zip(cols.iter()).map(|(v, col)| mysql_to_json(v, col)).collect());
-    })
-    .await?;
+    }
+    if truncated {
+        if let Some(s) = killer {
+            if let Ok(mut k) = s.conn().await {
+                let _ = k.query_drop(format!("KILL QUERY {thread_id}")).await;
+            }
+        }
+        // what the server already sent still has to be read; after the kill it ends with "interrupted"
+        while let Ok(Some(_)) = qr.next().await {}
+    }
     Ok(QueryResult { columns, rows, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, statement: None })
 }
 
@@ -291,6 +303,24 @@ mod tests {
         if let Ok(r) = res {
             assert_eq!(r[0].rows[0][0], json!(1));
         }
+    }
+
+    #[tokio::test]
+    async fn stops_reading_at_the_row_limit() {
+        let Some((s, db)) = session().await else { return };
+        let t = "rowline_test_many_rows";
+        s.execute(Some(&db), &format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id INT PRIMARY KEY); INSERT INTO {t} WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) SELECT i FROM n"), 1).await.unwrap();
+        // a table scan of big rows streams (small rows sit in the 16 KB net buffer); all 1,000 at 10 ms would take 10 s
+        let slow = format!("SELECT id, REPEAT('x', 4000) AS pad, SLEEP(0.01) AS z FROM {t}");
+        let start = Instant::now();
+        let r = s.execute(Some(&db), &format!("{slow}; SELECT 2 AS after"), 5).await.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(4), "read past the limit: {:?}", start.elapsed());
+        assert_eq!(r[0].rows.len(), 5);
+        assert!(r[0].truncated);
+        assert_eq!(r[1].rows[0][0], json!(2), "the next statement on the same connection still works");
+        // and the pooled connection is fine afterwards
+        assert_eq!(s.execute(Some(&db), "SELECT 3", 1).await.unwrap()[0].rows[0][0], json!(3));
+        s.execute(Some(&db), &format!("DROP TABLE {t}"), 1).await.unwrap();
     }
 
     #[tokio::test]
