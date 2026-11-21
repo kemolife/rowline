@@ -2,6 +2,7 @@ import { installCli } from '../lib/cliInstall';
 import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
 import { tlsWarning } from '../lib/tls';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDismiss } from '../lib/useDismiss';
 import { confirmDialog } from '../lib/api';
 import { ENV_ORDER, groupByProject, projectBadge, projectColor, relativeTime, type ProjectInfo } from '../lib/projects';
@@ -173,6 +174,11 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && filtered[0]) connect(filtered[0].id);
+                  else if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    if (query) setQuery('');
+                    else e.currentTarget.blur();
+                  }
                 }}
               />
             </div>
@@ -257,6 +263,12 @@ function ProjectCard({
 }) {
   const lastUsed = useApp((s) => s.lastUsed);
   const [menu, setMenu] = useState<string | null>(null);
+  // connection menu position (fixed, in a portal: inside the card it was hidden behind the next project)
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const openConnMenu = (id: string, x: number, y: number) => {
+    setMenuAt({ x: Math.min(x, window.innerWidth - 168), y: y + 96 > window.innerHeight ? y - 96 : y });
+    setMenu(id);
+  };
   const menuRef = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   useDismiss(menuRef, closeMenu, !!menu);
@@ -398,6 +410,10 @@ function ProjectCard({
                 )}
                 style={color ? { boxShadow: `inset 3px 0 0 ${auto ? `${color}80` : color}` } : undefined}
                 onDoubleClick={() => onConnect(c.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  openConnMenu(c.id, e.clientX, e.clientY);
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && onConnect(c.id)}
               >
                 <EngineBadge engine={c.engine} size={32} />
@@ -432,7 +448,8 @@ function ProjectCard({
                       className="icon-btn opacity-0 group-hover:opacity-100"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setMenu(c.id);
+                        const r = e.currentTarget.getBoundingClientRect();
+                        openConnMenu(c.id, r.right - 160, r.bottom + 4);
                       }}
                       aria-label="More"
                     >
@@ -443,15 +460,17 @@ function ProjectCard({
                     </button>
                   </div>
                 )}
-                {menu === c.id && (
-                  <div ref={menuRef} className="fade-in absolute right-28 top-11 z-20 w-40 rounded-lg border border-line-strong bg-surface-2 p-1 shadow-[var(--shadow)]">
+                {menu === c.id &&
+                  createPortal(
+                  <div ref={menuRef} className="fade-in fixed z-50 w-40 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]" style={{ left: menuAt.x, top: menuAt.y }} data-testid="connection-menu">
                     <button className={MENU_ITEM} onClick={() => (setMenu(null), onEdit(c))}>
                       <Pencil size={14} /> Edit
                     </button>
                     <button className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-danger hover:bg-danger-soft" onClick={() => (setMenu(null), onDelete(c))}>
                       <Trash2 size={14} /> Delete
                     </button>
-                  </div>
+                  </div>,
+                  document.getElementById('portal') ?? document.body,
                 )}
               </div>
             );

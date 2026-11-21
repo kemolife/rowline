@@ -73,7 +73,12 @@ function ItemsPane() {
           <Table2 size={13} className={cx('shrink-0', active ? 'text-accent' : 'text-ink-3')} />
         )}
         <span className="min-w-0 flex-1 overflow-hidden whitespace-nowrap">{middleTruncate(o.name, 30)}</span>
-        {o.rowEstimate != null && <span className="shrink-0 text-[11px] tabular-nums text-ink-3 opacity-0 group-hover:opacity-100">{formatCount(o.rowEstimate)}</span>}
+        {/* an estimate from the server (InnoDB statistics), not COUNT(*): marked with ~, and 0 is often just stale */}
+        {!!o.rowEstimate && (
+          <span className="shrink-0 text-[11px] tabular-nums text-ink-3 opacity-0 group-hover:opacity-100" title={`About ${formatCount(o.rowEstimate)} rows (estimate from the database, the data tab shows the exact count)`}>
+            ~{formatCount(o.rowEstimate)}
+          </span>
+        )}
         <button
           className={cx('flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-surface-3', isPinned ? 'text-accent' : 'text-ink-3 opacity-0 group-hover:opacity-100')}
           onClick={(e) => {
@@ -113,7 +118,24 @@ function ItemsPane() {
         )}
         <div className="relative">
           <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
-          <input className="field h-8 pl-8 text-[12.5px]" placeholder={`Filter ${formatCount(tables.length)} tables`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <input
+            className="field h-8 pl-8 text-[12.5px]"
+            placeholder={`Filter ${formatCount(tables.length)} tables`}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter opens the best match (same name, then starts with, then the first); Esc clears, then leaves the field
+              if (e.key === 'Enter' && matches.length) {
+                const best = matches.find((o) => o.name.toLowerCase() === query) ?? matches.find((o) => o.name.toLowerCase().startsWith(query)) ?? matches[0];
+                openTable(best.name, best.kind);
+              } else if (e.key === 'Escape') {
+                e.stopPropagation();
+                if (filter) setFilter('');
+                else e.currentTarget.blur();
+              }
+            }}
+            data-testid="table-filter"
+          />
         </div>
       </div>
 

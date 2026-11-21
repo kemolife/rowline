@@ -59,6 +59,14 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
   const addRef = useRef<HTMLButtonElement>(null);
   const sqlRef = useRef<FilterInputHandle>(null);
   const close = useCallback(() => setPopover(null), []);
+  // after a click on "SQL" the WHERE box gets the focus, so typing goes there
+  const focusSql = useRef(false);
+  useEffect(() => {
+    if (mode === 'sql' && focusSql.current) {
+      focusSql.current = false;
+      sqlRef.current?.focus();
+    }
+  }, [mode]);
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -73,7 +81,7 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
   return (
     <div className="flex min-w-[150px] flex-1 items-center gap-1.5" data-testid="filter-bar">
       {mode === 'sql' ? (
-        <div className="flex h-7 min-w-0 flex-1 items-center rounded-lg border border-line bg-surface focus-within:border-sel-strong focus-within:shadow-[0_0_0_3px_var(--sel)]">
+        <div className="flex h-7 min-w-[240px] flex-1 items-center rounded-lg border border-line bg-surface focus-within:border-sel-strong focus-within:shadow-[0_0_0_3px_var(--sel)]">
           <span className="mono pl-2.5 pr-1.5 text-[11.5px] font-semibold text-link">WHERE</span>
           <FilterInput
             ref={sqlRef}
@@ -152,7 +160,10 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
 
       <button
         className={cx('btn btn-ghost h-7 gap-1.5 px-2', mode === 'sql' && 'bg-surface-2 text-ink')}
-        onClick={() => onModeChange(mode === 'sql' ? 'chips' : 'sql')}
+        onClick={() => {
+          focusSql.current = mode !== 'sql';
+          onModeChange(mode === 'sql' ? 'chips' : 'sql');
+        }}
         title={mode === 'sql' ? 'Back to filter chips' : 'Write the WHERE clause in SQL'}
         data-testid="filter-mode"
       >

@@ -9,6 +9,7 @@ export default function TabBar() {
   const tabs = useWs((w) => w.tabs);
   const activeTabId = useWs((w) => w.activeTabId);
   const dirty = useWs((w) => w.dirtyTabs);
+  const currentDb = useWs((w) => w.session.database);
   const { setActiveTab, closeTab, closeTabs, openQuery, moveTab } = useWsActions();
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -95,7 +96,11 @@ export default function TabBar() {
           >
             {active && <span className="absolute inset-x-0 -bottom-px h-px bg-surface" />}
             <Icon size={13} className={cx('shrink-0', active ? 'text-accent' : 'text-ink-3')} />
-            <span className="min-w-0 flex-1 truncate">{title}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {/* opened in another database than the one selected now: say which */}
+              {t.kind === 'table' && t.database && currentDb && t.database !== currentDb && <span className="text-ink-3">{t.database} · </span>}
+              {title}
+            </span>
             <button
               className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-3 hover:bg-surface-3 hover:text-ink"
               onMouseDown={(e) => e.stopPropagation()}

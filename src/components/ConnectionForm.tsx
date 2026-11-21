@@ -105,21 +105,21 @@ export default function ConnectionForm() {
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]" onMouseDown={() => setEditing(null)}>
       <form
-        className="fade-in w-full max-w-[520px] rounded-2xl border border-line bg-surface shadow-[var(--shadow)]"
+        className="fade-in flex max-h-full w-full max-w-[520px] flex-col rounded-2xl border border-line bg-surface shadow-[var(--shadow)]"
         onMouseDown={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault();
           save(true);
         }}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+        <div className="flex shrink-0 items-center justify-between border-b border-line px-5 py-3.5">
           <div className="text-[14px] font-semibold">{isNew ? 'New connection' : 'Edit connection'}</div>
           <button type="button" className="icon-btn" onClick={() => setEditing(null)} aria-label="Close">
             <X size={16} />
           </button>
         </div>
 
-        <div className="space-y-4 px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4" data-testid="connection-form-body">
           <div className="grid grid-cols-2 gap-2">
             {(['mysql', 'sqlite'] as Engine[]).map((e) => (
               <button
@@ -329,7 +329,7 @@ export default function ConnectionForm() {
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-line px-5 py-3">
+        <div className="flex shrink-0 items-center justify-between border-t border-line px-5 py-3">
           <button type="button" className="btn" onClick={test} disabled={!!busy}>
             {busy === 'test' && <Loader2 size={14} className="animate-spin" />} Test
           </button>
