@@ -1,5 +1,6 @@
 import { installCli } from '../lib/cliInstall';
-import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
+import { tlsWarning } from '../lib/tls';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useDismiss } from '../lib/useDismiss';
 import { confirmDialog } from '../lib/api';
@@ -404,6 +405,11 @@ function ProjectCard({
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-[14px] font-semibold text-ink">{c.name}</span>
                     <EnvTag env={c.environment} />
+                    {tlsWarning(c) && (
+                      <span className="flex shrink-0 items-center gap-1 rounded bg-warning/12 px-1.5 py-px text-[10.5px] font-medium text-warning" title={tlsWarning(c) ?? ''} data-testid="tls-badge">
+                        <ShieldAlert size={11} /> {c.tls === 'required' ? 'TLS not verified' : 'No TLS'}
+                      </span>
+                    )}
                   </div>
                   <div className="mono mt-0.5 flex min-w-0 gap-1.5 text-[12px] text-ink-3" title={connectionSubtitle(c)}>
                     <span className="max-w-[70%] shrink-0 truncate text-ink-2">{parts.main}</span>

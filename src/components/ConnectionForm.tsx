@@ -6,6 +6,7 @@ import { effectiveClaudeAccess, type ClaudeAccess, type ConnectionInput, type En
 import { ENV_LABEL, cx, envColor } from '../lib/ui';
 import { useApp } from '../store/app';
 import { EngineBadge } from './StartScreen';
+import { defaultTls, tlsWarning } from '../lib/tls';
 
 const ENVS: Environment[] = ['local', 'dev', 'staging', 'prod'];
 const TLS_MODES: { mode: TlsMode; label: string; hint: string }[] = [
@@ -52,8 +53,13 @@ export default function ConnectionForm() {
     setResult(null);
   };
 
+  // a new connection to a remote host checks the server unless the user picks another mode; saved ones keep theirs
+  const tls: TlsMode = form.tls ?? (isNew ? defaultTls(form.host) : 'off');
+  const tlsWarn = form.engine === 'mysql' ? tlsWarning({ engine: form.engine, host: form.host, tls }) : null;
+
   const payload = (): ConnectionInput => ({
     ...form,
+    tls: form.engine === 'mysql' ? tls : form.tls,
     name: form.name.trim() || defaultName(form),
     port: form.engine === 'mysql' ? Number(form.port) || 3306 : null,
     // Claude off: no folder for Claude to read
@@ -245,13 +251,18 @@ export default function ConnectionForm() {
                       type="button"
                       key={t.mode}
                       onClick={() => set({ tls: t.mode })}
-                      className={cx('h-7 flex-1 rounded-md text-[12px] font-medium', (form.tls ?? 'off') === t.mode ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink')}
+                      className={cx('h-7 flex-1 rounded-md text-[12px] font-medium', tls === t.mode ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink')}
                     >
                       {t.label}
                     </button>
                   ))}
                 </div>
-                <p className="text-[11.5px] text-ink-3">{TLS_MODES.find((t) => t.mode === (form.tls ?? 'off'))?.hint}</p>
+                <p className="text-[11.5px] text-ink-3">{TLS_MODES.find((t) => t.mode === tls)?.hint}</p>
+                {tlsWarn && (
+                  <p className="rounded-md bg-warning/12 px-2 py-1.5 text-[11.5px] text-warning" data-testid="tls-warning">
+                    {tlsWarn}
+                  </p>
+                )}
               </div>
             </>
           ) : (
