@@ -25,6 +25,48 @@ fn blocked_function(name: &str) -> AppError {
     AppError::msg(format!("{name}() is not allowed: lock, sleep and benchmark functions are refused in read-only queries."))
 }
 
+/// MySQL schemas with users, password hashes, grants and other sessions' SQL. A read-only transaction
+/// does not hide them, so AI and CLI reads refuse them (and the live process list).
+const SYSTEM_SCHEMAS: &[&str] = &["mysql", "performance_schema", "sys"];
+
+fn system_data() -> AppError {
+    AppError::msg("This query reads MySQL system data (mysql.*, performance_schema, sys or the process list). It is not allowed for AI and CLI reads.")
+}
+
+/// Err when `database` is a MySQL system schema (an unqualified `FROM user` would read `mysql.user`).
+pub fn blocked_database(database: Option<&str>) -> AppResult<()> {
+    match database {
+        Some(db) if SYSTEM_SCHEMAS.iter().any(|s| s.eq_ignore_ascii_case(db.trim())) => Err(system_data()),
+        _ => Ok(()),
+    }
+}
+
+/// True when the statement names a system schema (`mysql.x`, `` `sys`.x ``) or the process list.
+fn reads_system_data(sql: &str) -> bool {
+    let text = mask_with(sql, Dialect::Mysql, true);
+    let chars: Vec<char> = text.chars().collect();
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_word(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        // `db.mysql.x` is not a thing, but `t.mysql` (a column) must not count as a schema
+        let after_dot = chars[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'.');
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        let word = chars[start..i].iter().collect::<String>().to_ascii_lowercase();
+        let qualifier = chars[i..].iter().find(|c| !c.is_whitespace()) == Some(&'.');
+        if word == "processlist" || (qualifier && !after_dot && SYSTEM_SCHEMAS.contains(&word.as_str())) {
+            return true;
+        }
+    }
+    false
+}
+
 fn not_read_only() -> AppError {
     AppError::msg("Only read-only queries are allowed (SELECT, SHOW, EXPLAIN, WITH … SELECT).")
 }
@@ -110,6 +152,9 @@ pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
     if let Some((name, _)) = words.iter().find(|(w, paren)| *paren && BLOCKED_FUNCTIONS.contains(&w.as_str())) {
         return Err(blocked_function(name));
     }
+    if dialect == Dialect::Mysql && reads_system_data(&text) {
+        return Err(system_data());
+    }
     if first != "SHOW" {
         let writes = words.iter().any(|(w, paren)| match w.as_str() {
             "REPLACE" | "INSERT" => !paren,
@@ -127,6 +172,11 @@ pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
 /// Follows the server lexer: MySQL escapes with `\` inside '…' and "…", SQLite never does.
 /// MySQL `/*! … */` and MariaDB `/*M! … */` comments are executed by the server, so their content is kept.
 fn mask(sql: &str, dialect: Dialect) -> String {
+    mask_with(sql, dialect, false)
+}
+
+/// Like `mask`, but MySQL `` `quoted` `` identifiers keep their name (to see which schema a query reads).
+fn mask_with(sql: &str, dialect: Dialect, keep_backticks: bool) -> String {
     let mysql = dialect == Dialect::Mysql;
     let chars: Vec<char> = sql.chars().collect();
     let mut out = String::with_capacity(sql.len());
@@ -143,6 +193,7 @@ fn mask(sql: &str, dialect: Dialect) -> String {
             i += 1;
         } else if c == '\'' || c == '"' || c == '`' {
             i += 1;
+            let start = i;
             while i < chars.len() {
                 if chars[i] == '\\' && mysql && c != '`' {
                     i += 2;
@@ -156,6 +207,10 @@ fn mask(sql: &str, dialect: Dialect) -> String {
                     break;
                 }
                 i += 1;
+            }
+            if keep_backticks && c == '`' {
+                out.push(' ');
+                out.extend(chars[start..i.min(chars.len())].iter().filter(|ch| **ch != '`'));
             }
             out.push(' ');
             i += 1;
@@ -348,6 +403,42 @@ mod tests {
         assert!(check("SELECT LOAD_FILE('/etc/passwd')", Mysql).is_err());
         assert!(check("select load_file ('/etc/passwd') as f", Mysql).is_err());
         assert!(check("SELECT 'load_file' AS note", Mysql).is_ok(), "only the function, not text");
+    }
+
+    #[test]
+    fn rejects_system_schemas_and_process_list() {
+        for sql in [
+            "SELECT user, authentication_string FROM mysql.user",
+            "SELECT * FROM `mysql`.`user`",
+            "select * from MySQL . user",
+            "SELECT * FROM t JOIN mysql.db d ON 1",
+            "SELECT sql_text FROM performance_schema.events_statements_history",
+            "SELECT * FROM `performance_schema`.threads",
+            "SELECT * FROM sys.session",
+            "SELECT info FROM information_schema.PROCESSLIST",
+            "SELECT info FROM information_schema.`processlist`",
+            "SHOW PROCESSLIST",
+            "SHOW FULL PROCESSLIST",
+        ] {
+            let err = check(sql, Mysql).expect_err(sql).to_string();
+            assert!(err.contains("system"), "{sql}: {err}");
+        }
+        // the words as text, aliases or column names are fine
+        for sql in [
+            "SELECT 'mysql.user' AS note",
+            "SELECT mysql_version, sys_id FROM t",
+            "SELECT u.name FROM users u",
+            "SELECT table_name FROM information_schema.tables",
+            "SELECT * FROM shop.orders",
+        ] {
+            assert!(check(sql, Mysql).is_ok(), "should accept: {sql}");
+        }
+        // SQLite has no such schemas
+        assert!(check("SELECT * FROM sys.t", Sqlite).is_ok());
+        assert!(blocked_database(Some("mysql")).is_err());
+        assert!(blocked_database(Some("Performance_Schema")).is_err());
+        assert!(blocked_database(Some("shop")).is_ok());
+        assert!(blocked_database(None).is_ok());
     }
 
     #[test]

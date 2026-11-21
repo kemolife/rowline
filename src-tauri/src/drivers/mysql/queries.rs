@@ -61,6 +61,8 @@ impl MysqlSession {
     /// Runs one statement inside a READ ONLY transaction, limited to readonly::TIMEOUT.
     pub async fn select_read_only(&self, database: Option<&str>, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
         let timeout = crate::readonly::TIMEOUT;
+        // `FROM user` with database `mysql` would read mysql.user without naming it
+        crate::readonly::blocked_database(self.db(database))?;
         let mut c = self.conn().await?;
         if let Some(db) = self.db(database) {
             c.query_drop(format!("USE {}", Dialect::Mysql.quote_ident(db))).await?;

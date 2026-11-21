@@ -5,7 +5,7 @@
 use crate::commands::AppState;
 use crate::error::{AppError, AppResult};
 use crate::manager::Session;
-use crate::model::{ConnectionConfig, Engine, HistoryEntry};
+use crate::model::{ClaudeAccess, ConnectionConfig, Engine, HistoryEntry};
 use crate::readonly;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -98,10 +98,14 @@ pub async fn handle(state: &AppState, req: Request) -> Value {
     }
 }
 
-/// Open connections, in the order of their names
+/// Open connections the user lets AI see ("Claude access" is not Off), in the order of their names
 async fn open_connections(state: &AppState) -> Vec<ConnectionConfig> {
     let ids = state.manager.open_ids().await;
-    let mut list: Vec<ConnectionConfig> = ids.iter().filter_map(|id| state.store.connection(id).ok()).collect();
+    let mut list: Vec<ConnectionConfig> = ids
+        .iter()
+        .filter_map(|id| state.store.connection(id).ok())
+        .filter(|c| c.claude_access() != ClaudeAccess::Off)
+        .collect();
     list.sort_by_key(|c| c.name.to_lowercase());
     list
 }
@@ -118,7 +122,7 @@ async fn connections(state: &AppState) -> AppResult<Value> {
     let list: Vec<Value> = open_connections(state)
         .await
         .iter()
-        .map(|c| json!({ "name": c.name, "environment": c.environment, "engine": c.engine, "database": database(state, c, None) }))
+        .map(|c| json!({ "name": c.name, "environment": c.environment, "engine": c.engine, "database": database(state, c, None), "access": c.claude_access() }))
         .collect();
     Ok(Value::Array(list))
 }
@@ -177,6 +181,7 @@ async fn query(state: &AppState, req: &Request) -> Value {
     };
     let db = database(state, &c, req.db.as_deref());
     let sql = req.sql.as_deref().unwrap_or("").to_string();
+    let access = c.claude_access();
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let started = std::time::Instant::now();
     let log = |ok: bool, error: Option<String>, rows: Option<usize>| {
@@ -193,6 +198,14 @@ async fn query(state: &AppState, req: &Request) -> Value {
             rows,
         });
     };
+    if access != ClaudeAccess::Data {
+        let e = AppError::msg(format!(
+            "Connection \"{}\" allows schema only for AI (Claude access: Schema). Use `rowline tables` / `describe`, or set Claude access to Data in the connection settings.",
+            c.name
+        ));
+        log(false, Some(format!("Blocked: {e}")), None);
+        return blocked(e);
+    }
     // the rule check comes first: a write never reaches the database
     let statement = match readonly::check(&sql, s.dialect()) {
         Ok(st) => st,
@@ -241,7 +254,7 @@ mod tests {
             .execute_batch("CREATE TABLE orders (id INTEGER PRIMARY KEY, total REAL); WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 300) INSERT INTO orders (total) SELECT i FROM n;")
             .unwrap();
         let state = Arc::new(AppState::new(Store::new(dir.path().join("cfg"), SecretStore::file(dir.path().join("s.json"))).unwrap()));
-        let saved = dispatch(&state, "save_connection", json!({ "id": "", "name": "Shop prod", "engine": "sqlite", "environment": "prod", "filePath": db.to_str().unwrap() })).await.unwrap();
+        let saved = dispatch(&state, "save_connection", json!({ "id": "", "name": "Shop prod", "engine": "sqlite", "environment": "prod", "claudeAccess": "data", "filePath": db.to_str().unwrap() })).await.unwrap();
         let id = saved["id"].as_str().unwrap().to_string();
         Fixture { dir, state, id }
     }
@@ -298,6 +311,39 @@ mod tests {
         let history = f.state.store.history(Some(&f.id)).unwrap();
         assert!(history[1].error.as_deref().unwrap().starts_with("Blocked:"), "{:?}", history[1]);
         assert!(!history[1].ok);
+    }
+
+    #[tokio::test]
+    async fn follows_the_claude_access_setting() {
+        let f = fixture().await;
+        let set = |access: &str| {
+            let mut c = f.state.store.connection(&f.id).unwrap();
+            c.claude_access = Some(serde_json::from_value(json!(access)).unwrap());
+            f.state.store.save_connection(c).unwrap();
+        };
+        dispatch(&f.state, "connect", json!({ "id": f.id })).await.unwrap();
+        let sql = || Request { sql: Some("SELECT id FROM orders".into()), ..req("query") };
+
+        // schema only: tables and columns yes, rows no
+        set("schema");
+        assert!(handle(&f.state, req("tables")).await["data"].to_string().contains("orders"));
+        let q = handle(&f.state, sql()).await;
+        assert_eq!(q["blocked"], true, "{q}");
+        assert!(q["error"].as_str().unwrap().contains("Claude access"), "{q}");
+
+        // off: the connection is not there at all
+        set("off");
+        assert_eq!(handle(&f.state, req("connections")).await["data"], json!([]));
+        assert!(handle(&f.state, req("tables")).await["error"].as_str().unwrap().contains("No connection is open"));
+        assert_eq!(handle(&f.state, sql()).await["ok"], false);
+
+        // a prod connection without a setting is schema only
+        let mut c = f.state.store.connection(&f.id).unwrap();
+        c.claude_access = None;
+        f.state.store.save_connection(c).unwrap();
+        assert_eq!(handle(&f.state, sql()).await["blocked"], true);
+        set("data");
+        assert_eq!(handle(&f.state, sql()).await["ok"], true);
     }
 
     #[tokio::test]
@@ -368,7 +414,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = Arc::new(AppState::new(Store::new(dir.path().join("cfg"), SecretStore::file(dir.path().join("s.json"))).unwrap()));
         let saved = dispatch(&state, "save_connection", json!({
-            "id": "", "name": "My prod", "engine": "mysql", "environment": "prod", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "password": p[3]
+            "id": "", "name": "My prod", "engine": "mysql", "environment": "prod", "claudeAccess": "data", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "password": p[3]
         })).await.unwrap();
         let id = saved["id"].as_str().unwrap().to_string();
         dispatch(&state, "connect", json!({ "id": id })).await.unwrap();
