@@ -177,6 +177,9 @@ impl From<TableStructure> for SchemaTable {
 #[serde(rename_all = "camelCase")]
 pub struct SchemaSnapshot {
     pub taken_at: chrono::DateTime<chrono::Utc>,
+    /// the database the snapshot was taken of; missing in snapshots made before it existed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
     pub tables: Vec<SchemaTable>,
 }
 
@@ -231,6 +234,16 @@ pub struct QueryResult {
     pub truncated: bool,
     /// SQL text of the statement (SQL editor results)
     pub statement: Option<String>,
+    /// The statement failed with this message (a script keeps the results before it and stops here)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl QueryResult {
+    /// The entry for a statement of a script that failed.
+    pub fn failed(statement: String, error: String) -> Self {
+        QueryResult { statement: Some(statement), error: Some(error), ..Default::default() }
+    }
 }
 
 /// One row key or row values: column name -> value

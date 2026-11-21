@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { api } from '../lib/api';
 import type { SchemaSnapshot, SchemaTable } from '../lib/schemaDiff';
 import { relationsOf, type Relation } from '../lib/diagram';
-import { diffSchema } from '../lib/schemaDiff';
+import { diffSchema, snapshotsFor } from '../lib/schemaDiff';
 import { schemaWithKeys, type VirtualKey } from '../lib/virtualKeys';
 import { tableKey, useApp } from './app';
 
@@ -42,7 +42,8 @@ export const useSchema = create<SchemaState>((set, get) => {
       if (cur?.loading || (cur?.live && !force)) return;
       patch(key, { loading: true, error: null });
       try {
-        const [live, snapshots] = await Promise.all([api.schemaGraph(cid, database), api.schemaSnapshots(cid, database)]);
+        const [live, saved] = await Promise.all([api.schemaGraph(cid, database), api.schemaSnapshots(cid, database)]);
+        const snapshots = snapshotsFor(saved, database);
         patch(key, { live, snapshots, compareTo: snapshots.length - 1, loading: false });
       } catch (e) {
         patch(key, { loading: false, error: (e as Error).message });

@@ -59,7 +59,10 @@ export default function ResultPanel({
 
   const run = runs[index];
   const result = run?.results[run.current];
-  const hasRows = !!result && result.columns.length > 0;
+  /** error of the run, or of the shown statement of a script that stopped there */
+  const error = run?.error ?? result?.error ?? null;
+  const errorSql = run?.error ? run.sql : (result?.statement ?? run?.sql ?? '');
+  const hasRows = !!result && !result.error && result.columns.length > 0;
   const table = guessTable(result?.statement ?? run?.sql ?? null);
 
   const text = useMemo(() => {
@@ -116,6 +119,7 @@ export default function ResultPanel({
                   .reverse()
                   .map(({ r, i }) => {
                     const rows = r.results.filter((x) => x.columns.length).reduce((n, x) => n + x.rows.length, 0);
+                    const failed = !!r.error || r.results.some((x) => x.error);
                     return (
                       <button
                         key={r.id}
@@ -125,11 +129,11 @@ export default function ResultPanel({
                           setMenu(null);
                         }}
                       >
-                        <span className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', r.error ? 'bg-danger' : 'bg-success')} />
+                        <span className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', failed ? 'bg-danger' : 'bg-success')} />
                         <span className="shrink-0 tabular-nums text-ink-3">#{i + 1}</span>
                         <span className="mono line-clamp-2 min-w-0 flex-1 text-[11.5px] text-ink">{firstLine(r.sql)}</span>
                         <span className="shrink-0 whitespace-nowrap tabular-nums text-[11px] text-ink-3">
-                          {r.error ? 'error' : `${formatCount(rows)} rows`} · {r.elapsedMs} ms · {new Date(r.startedAt).toLocaleTimeString()}
+                          {r.error ? 'error' : failed ? `${formatCount(rows)} rows, error` : `${formatCount(rows)} rows`} · {r.elapsedMs} ms · {new Date(r.startedAt).toLocaleTimeString()}
                         </span>
                       </button>
                     );
@@ -147,11 +151,12 @@ export default function ResultPanel({
             {run.results.map((r, i) => (
               <button
                 key={i}
-                className={cx('h-6 shrink-0 rounded-md px-2 text-[12px]', i === run.current ? 'bg-sel font-medium text-link' : 'text-ink-2 hover:bg-surface-2')}
+                className={cx('h-6 shrink-0 rounded-md px-2 text-[12px]', i === run.current ? 'bg-sel font-medium text-link' : 'text-ink-2 hover:bg-surface-2', r.error && 'text-danger')}
                 onClick={() => onResultIndex(index, i)}
                 title={r.statement ?? undefined}
+                data-testid={r.error ? 'result-error-tab' : undefined}
               >
-                {r.columns.length ? `Result ${i + 1}` : `Statement ${i + 1}`}
+                {r.error ? `Error ${i + 1}` : r.columns.length ? `Result ${i + 1}` : `Statement ${i + 1}`}
               </button>
             ))}
           </div>
@@ -224,20 +229,21 @@ export default function ResultPanel({
             </button>
           </>
         )}
-        {result && (
+        {result && !result.error && (
           <span className="shrink-0 pl-1 text-[12px] tabular-nums text-ink-2" data-testid="result-status">
             {result.columns.length ? `${formatCount(result.rows.length)}${result.truncated ? '+' : ''} rows` : `${formatCount(result.affectedRows ?? 0)} affected`} · {result.elapsedMs} ms
           </span>
         )}
       </div>
 
-      {run.error ? (
+      {error ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8">
-          <CenteredState error={run.error} />
-          {explainSqlError(run.error, run.sql) && (
-            <div className="-mt-6 max-w-xl rounded-xl border border-line bg-surface-2 px-4 py-3 text-[12.5px] text-ink-2" data-testid="error-hint">
+          <CenteredState error={error} />
+          {!run.error && result?.statement && <div className="mono -mt-6 max-w-xl truncate text-[11.5px] text-ink-3" data-testid="error-statement" title={result.statement}>{result.statement}</div>}
+          {explainSqlError(error, errorSql) && (
+            <div className={cx('max-w-xl rounded-xl border border-line bg-surface-2 px-4 py-3 text-[12.5px] text-ink-2', run.error && '-mt-6')} data-testid="error-hint">
               <span className="font-semibold text-ink">Hint: </span>
-              {explainSqlError(run.error, run.sql)}
+              {explainSqlError(error, errorSql)}
             </div>
           )}
         </div>

@@ -234,9 +234,11 @@ impl Store {
         self.snapshots_dir(connection_id).join(format!("{safe}.json"))
     }
 
-    /// Saved schema snapshots of one database, oldest first.
+    /// Saved schema snapshots of one database, oldest first. Two database names can share a file
+    /// (`a/b` and `a_b`), so a snapshot of another database is never returned.
     pub fn schema_snapshots(&self, connection_id: &str, database: Option<&str>) -> AppResult<Vec<SchemaSnapshot>> {
-        Ok(read_json(&self.snapshots_path(connection_id, database))?.unwrap_or_default())
+        let all: Vec<SchemaSnapshot> = read_json(&self.snapshots_path(connection_id, database))?.unwrap_or_default();
+        Ok(all.into_iter().filter(|s| s.database.is_none() || s.database.as_deref() == database).collect())
     }
 
     /// Adds a snapshot ("mark as seen"); keeps the last SNAPSHOT_LIMIT.
@@ -245,7 +247,7 @@ impl Store {
         let path = self.snapshots_path(connection_id, database);
         std::fs::create_dir_all(path.parent().expect("snapshot dir"))?;
         let mut all: Vec<SchemaSnapshot> = read_json(&path)?.unwrap_or_default();
-        let snapshot = SchemaSnapshot { taken_at: chrono::Utc::now(), tables };
+        let snapshot = SchemaSnapshot { taken_at: chrono::Utc::now(), database: database.map(str::to_string), tables };
         all.push(snapshot.clone());
         let extra = all.len().saturating_sub(SNAPSHOT_LIMIT);
         all.drain(..extra);
@@ -383,6 +385,27 @@ mod tests {
         assert!(dir.path().join("schema-snapshots/a/shop____x.json").exists());
         store.delete_connection("a").unwrap();
         assert!(store.schema_snapshots("a", Some("shop/../x")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_snapshot_of_one_database_is_never_used_for_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf(), SecretStore::file(dir.path().join("secrets.json"))).unwrap();
+        store.save_connection(config("a")).unwrap();
+        store.save_connection(config("b")).unwrap();
+        let table = |name: &str| SchemaTable { name: name.into(), kind: ObjectKind::Table, columns: vec![], foreign_keys: vec![], row_estimate: None, comment: None, unique_keys: vec![] };
+        let saved = store.add_schema_snapshot("a", Some("x/y"), vec![table("rowline_x")]).unwrap();
+        assert_eq!(saved.database.as_deref(), Some("x/y"));
+        // `x_y` shares the file name with `x/y`, but it is another database
+        assert!(store.schema_snapshots("a", Some("x_y")).unwrap().is_empty());
+        assert!(store.schema_snapshots("a", Some("shop")).unwrap().is_empty());
+        assert!(store.schema_snapshots("b", Some("x/y")).unwrap().is_empty());
+        assert_eq!(store.schema_snapshots("a", Some("x/y")).unwrap().len(), 1);
+        // old snapshots (no database inside) still count for the database of their own file
+        let path = dir.path().join("schema-snapshots/a/shop.json");
+        std::fs::write(&path, r#"[{"takenAt":"2026-01-01T00:00:00Z","tables":[]}]"#).unwrap();
+        assert_eq!(store.schema_snapshots("a", Some("shop")).unwrap().len(), 1);
+        assert!(store.schema_snapshots("a", Some("other")).unwrap().is_empty());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changeLines, diffSchema, hasChanges, summaryText, type SchemaTable } from './schemaDiff';
+import { changeLines, diffSchema, hasChanges, snapshotsFor, summaryText, type SchemaSnapshot, type SchemaTable } from './schemaDiff';
 
 const col = (name: string, dataType = 'int', extra: Partial<SchemaTable['columns'][number]> = {}) => ({
   name,
@@ -57,5 +57,25 @@ describe('schema diff', () => {
       '- table invoices was added',
       '- table legacy was removed',
     ]);
+  });
+});
+
+describe('snapshots per database', () => {
+  const snap = (database: string | null | undefined, ...names: string[]): SchemaSnapshot => ({ takenAt: '2026-10-21T08:20:29Z', database, tables: names.map((n) => table(n, [col('id')])) });
+
+  it('never compares a snapshot of database X with database Y', () => {
+    const x = snap('x', 'rowline_company', 'orders');
+    expect(snapshotsFor([x], 'shop')).toEqual([]);
+    expect(snapshotsFor([x], null)).toEqual([]);
+    expect(snapshotsFor([x], 'x')).toEqual([x]);
+    // so the diff of shop shows no removed rowline_* tables
+    const live = [table('orders', [col('id')])];
+    const kept = snapshotsFor([x], 'shop');
+    expect(diffSchema(kept[kept.length - 1]?.tables ?? null, live).summary.tablesRemoved).toBe(0);
+  });
+
+  it('keeps old snapshots without a database (they come from the file of this database)', () => {
+    const old = snap(undefined, 'orders');
+    expect(snapshotsFor([old, snap('x', 'a')], 'shop')).toEqual([old]);
   });
 });

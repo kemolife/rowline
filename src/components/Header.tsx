@@ -17,7 +17,8 @@ export default function Header({ trafficLightSpace }: { trafficLightSpace: boole
   const { openQuery, disconnect } = useWsActions();
   const env = session.config.environment;
   const object = tab?.kind === 'table' ? tab.table : tab?.kind === 'query' ? tab.title : tab?.kind === 'diagram' ? 'Relations' : null;
-  const database = session.config.engine === 'sqlite' ? session.info.currentDatabase : session.database;
+  // a table tab stays in the database it was opened in, also after the sidebar switches to another one
+  const database = session.config.engine === 'sqlite' ? session.info.currentDatabase : tab?.kind === 'table' && tab.database ? tab.database : session.database;
   // SQLite connections are often named after their file; don't show the same text twice
   const project = useProjects().get(session.connectionId) ?? null;
   const parts = [session.info.version, session.config.name, database !== session.config.name ? database : null, object];

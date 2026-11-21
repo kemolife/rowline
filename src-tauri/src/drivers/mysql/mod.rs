@@ -29,8 +29,8 @@ pub struct MysqlSession {
     /// liveness checks done (tests)
     pings: std::sync::atomic::AtomicU64,
     default_database: Option<String>,
-    /// Server thread ids of queries currently running from the SQL editor / grid
-    running: Mutex<Vec<u32>>,
+    /// Server thread ids of queries running from the SQL editor / grid, with the tab that started them
+    pub(super) running: Mutex<Vec<(u32, Option<String>)>>,
 }
 
 pub struct MysqlParams<'a> {

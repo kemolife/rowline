@@ -95,29 +95,38 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const columnTypes = useMemo(() => Object.fromEntries(structure?.columns.map((c) => [c.name, c.dataType]) ?? []), [structure]);
   const filter = filterMode === 'sql' ? (tab.sqlFilter ?? '').trim() : (compileFilter(rules, session.config.engine, columnTypes) ?? '');
 
-  const load = useCallback(async () => {
+  // the row count runs once per table and filter (not on every page or sort change); Refresh and Save recount
+  const countedFor = useRef<string | null>(null);
+  const countSeq = useRef(0);
+
+  const load = useCallback(async (recount = false) => {
     const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
     const request = { database, table: tab.table, filter: filter || null, sort, limit, offset };
     try {
-      const res = await api.selectPage(id, request);
+      const res = await api.selectPage(id, request, tab.id);
       if (seq !== loadSeq.current) return;
       setResult(res);
       setSelectedRows([]);
       gridRef.current?.clearSelection();
       // total in the background; large tables can take a moment
-      setTotal(null);
-      setCounting(true);
-      api
-        .countRows(id, request)
-        .then((n) => seq === loadSeq.current && setTotal(n))
-        .catch(() => undefined)
-        .finally(() => seq === loadSeq.current && setCounting(false));
       const key = `${id}/${database ?? ''}/${tab.table}`;
-      if (filter && tableTotal?.key !== key)
+      const countKey = `${key}/${filter}`;
+      if (recount || countedFor.current !== countKey) {
+        countedFor.current = countKey;
+        const cs = ++countSeq.current;
+        setTotal(null);
+        setCounting(true);
         api
-          .countRows(id, { ...request, filter: null })
+          .countRows(id, request, tab.id)
+          .then((n) => cs === countSeq.current && setTotal(n))
+          .catch(() => undefined)
+          .finally(() => cs === countSeq.current && setCounting(false));
+      }
+      if (filter && (recount || tableTotal?.key !== key))
+        api
+          .countRows(id, { ...request, filter: null }, tab.id)
           .then((n) => setTableTotal({ key, n }))
           .catch(() => undefined);
     } catch (e) {
@@ -126,7 +135,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       if (seq === loadSeq.current) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tableTotal only skips a repeated count
-  }, [id, database, tab.table, filter, sort, limit, offset]);
+  }, [id, database, tab.id, tab.table, filter, sort, limit, offset]);
 
   useEffect(() => {
     if (tab.view === 'data') load();
@@ -283,7 +292,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       setReview(null);
       setHistory(emptyHistory());
       toast(`Saved · ${n} row${n === 1 ? '' : 's'} affected`, 'success');
-      await load();
+      await load(true);
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
@@ -300,16 +309,18 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const cancel = async () => {
     const wasLoading = loading;
     loadSeq.current++;
+    countSeq.current++;
+    countedFor.current = null;
     setLoading(false);
     setCounting(false);
     if (wasLoading) setError('Cancelled. The rows were not loaded.');
-    await api.cancelQuery(id).catch(() => undefined);
+    await api.cancelQuery(id, tab.id).catch(() => undefined);
   };
 
   const refresh = async () => {
     if (pending && !(await confirmDialog('Refreshing discards unsaved changes. Continue?'))) return;
     setHistory(emptyHistory());
-    load();
+    load(true);
   };
 
   // keyboard shortcuts while this tab is visible
@@ -321,7 +332,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       if (matchKey(e, 'mod+s')) {
         e.preventDefault();
         startSave();
-      } else if (matchKey(e, 'mod+.') || (loading && !typing && e.key === 'Escape')) {
+      } else if (matchKey(e, 'mod+.')) {
         e.preventDefault();
         cancel();
       } else if (matchKey(e, 'mod+r')) {
@@ -343,6 +354,19 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  });
+
+  // Esc while loading stops the load. Capture phase: it runs before the filter box, which would clear the typed text.
+  useEffect(() => {
+    if (!active || tab.view !== 'data' || !loading) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      cancel();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   });
 
   const setSort = (next: SortSpec[]) => {
@@ -413,16 +437,16 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     <>
       {loading ? (
         <button className="btn h-7 gap-1.5 px-2" onClick={cancel} title={`Stop loading (Esc or ${MOD}.)`} data-testid="cancel-load">
-          <Loader2 size={13} className="animate-spin" /> Cancel
+          <Loader2 size={13} className="animate-spin" /> <span className="@max-[820px]:hidden">Cancel</span>
         </button>
       ) : (
         <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={refresh} title={`Reload the data (${MOD}R)`} data-testid="refresh">
-          <RefreshCw size={13} /> Refresh
+          <RefreshCw size={13} /> <span className="@max-[820px]:hidden">Refresh</span>
         </button>
       )}
       {result && <ColumnsMenu columns={columnChoices} hidden={hidden} onChange={setHidden} />}
       <button className={cx('btn btn-ghost h-7 gap-1.5 px-2', rowPanelOpen && 'bg-surface-2 text-ink')} onClick={toggleRowPanel} title="Show or hide all fields of the selected row" aria-label="Toggle row details">
-        <PanelRight size={13} /> Row details
+        <PanelRight size={13} /> <span className="@max-[820px]:hidden">Row details</span>
       </button>
     </>
   );
@@ -458,10 +482,14 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
   return (
     <div className="flex min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="@container relative flex min-w-0 flex-1 flex-col">
+        {/* new rows are loading: the old ones stay, a bar under the toolbar says they are about to change */}
+        {loading && result && <div className="pointer-events-none absolute inset-x-0 top-11 z-10 h-0.5 animate-pulse bg-accent" data-testid="loading-bar" />}
         <Toolbar>
           <ViewSwitch view="data" onChange={(view) => updateTab(tab.id, { view })} />
           <div className="mx-0.5 h-5 w-px bg-line" />
+          {/* the filter area gives way (scrolls) so the buttons on the right always stay reachable */}
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:none]">
           <FilterBar
             ref={filterRef}
             usageKey={tableKey}
@@ -482,11 +510,12 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
             onSqlClear={clearSql}
             suggestValues={suggestValues}
           />
-          {toolbarEnd}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">{toolbarEnd}</div>
         </Toolbar>
 
         {error ? (
-          <CenteredState error={error} onRetry={load} />
+          <CenteredState error={error} onRetry={() => load(true)} />
         ) : !result ? (
           <CenteredState loading />
         ) : (
@@ -512,7 +541,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
         <BottomBar>
           <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={addRow} disabled={!editable} title="Add a row" data-testid="add-row">
-            <Plus size={14} /> Add row
+            <Plus size={14} /> <span className="@max-[720px]:hidden">Add row</span>
           </button>
           <button
             className="btn btn-ghost h-7 gap-1.5 px-2"
@@ -520,7 +549,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
             disabled={!loadedCount}
             title="Export this page (CSV / JSON)"
           >
-            <Download size={13} /> Export
+            <Download size={13} /> <span className="@max-[720px]:hidden">Export</span>
           </button>
           {editable && validSelected.length > 0 && (
             <>
@@ -538,15 +567,15 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
           {!editable && result && tab.objectKind === 'table' && structure && <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3">Read-only · no primary key</span>}
           {tab.objectKind === 'view' && <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3">View · read-only</span>}
 
-          <div className="flex-1" />
-
+          {/* the count takes the free middle space and is cut (…) instead of drawing over the buttons */}
+          <div className="flex min-w-0 flex-1 justify-center px-2">
           {result && !error && (
-            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[12px] tabular-nums text-ink-2 max-lg:hidden" data-testid="row-count">
+            <span className="min-w-0 truncate whitespace-nowrap text-[12px] tabular-nums text-ink-2 @max-[640px]:hidden" data-testid="row-count">
               {total == null ? (
                 counting ? (
                   <span className="text-ink-3">
                     Counting rows…{' '}
-                    <button className="pointer-events-auto underline-offset-2 hover:text-ink hover:underline" onClick={cancel} data-testid="cancel-count">
+                    <button className="underline-offset-2 hover:text-ink hover:underline" onClick={cancel} data-testid="cancel-count">
                       Stop
                     </button>
                   </span>
@@ -565,6 +594,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
               {validSelected.length > 0 && <span className="text-ink-3"> · {formatCount(validSelected.length)} selected</span>}
             </span>
           )}
+          </div>
 
           {pending > 0 && (
             <div className="fade-in mr-2 flex shrink-0 items-center gap-1.5" data-testid="pending-bar">

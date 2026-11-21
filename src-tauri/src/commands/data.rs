@@ -44,6 +44,9 @@ const SUGGEST_LIMIT: usize = 50;
 struct PageArgs {
     id: String,
     request: PageRequest,
+    /// tab that runs the query (Cancel there stops only its queries)
+    #[serde(default)]
+    owner: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +56,16 @@ struct ExecuteArgs {
     database: Option<String>,
     sql: String,
     max_rows: Option<usize>,
+    #[serde(default)]
+    owner: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelArgs {
+    id: String,
+    #[serde(default)]
+    owner: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -87,7 +100,8 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         }
         "select_page" => {
             let a: PageArgs = parse(args)?;
-            ok(state.manager.get(&a.id).await?.select_page(a.request).await?)
+            let session = state.manager.get(&a.id).await?;
+            ok(crate::owner::scope(a.owner, session.select_page(a.request)).await?)
         }
         "common_values" => {
             let a: ValuesArgs = parse(args)?;
@@ -99,13 +113,14 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         }
         "count_rows" => {
             let a: PageArgs = parse(args)?;
-            ok(state.manager.get(&a.id).await?.count(a.request).await?)
+            let session = state.manager.get(&a.id).await?;
+            ok(crate::owner::scope(a.owner, session.count(a.request)).await?)
         }
         "execute_sql" => {
             let a: ExecuteArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
             let started = std::time::Instant::now();
-            let res = session.execute(a.database.as_deref(), &a.sql, a.max_rows.unwrap_or(DEFAULT_MAX_ROWS)).await;
+            let res = crate::owner::scope(a.owner.clone(), session.execute(a.database.as_deref(), &a.sql, a.max_rows.unwrap_or(DEFAULT_MAX_ROWS))).await;
             let _ = state.store.add_history(HistoryEntry {
                 id: uuid::Uuid::new_v4().to_string(),
                 connection_id: a.id.clone(),
@@ -113,7 +128,8 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
                 sql: a.sql.clone(),
                 executed_at: chrono::Utc::now(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                ok: res.is_ok(),
+                // a script that stopped at a failing statement still returns the results before it
+                ok: res.as_ref().is_ok_and(|r| r.iter().all(|q| q.error.is_none())),
                 source: None,
                 error: None,
                 rows: None,
@@ -135,8 +151,8 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             ok(state.manager.get(&a.id).await?.apply_changes(a.database.as_deref(), &a.table, a.changes).await?)
         }
         "cancel_query" => {
-            let a: IdArgs = parse(args)?;
-            state.manager.get(&a.id).await?.cancel().await?;
+            let a: CancelArgs = parse(args)?;
+            state.manager.get(&a.id).await?.cancel(a.owner.as_deref()).await?;
             ok(true)
         }
         other => Err(super::unknown(other)),

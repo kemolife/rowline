@@ -15,7 +15,17 @@ export interface SchemaTable {
 /** Mirrors model::SchemaSnapshot */
 export interface SchemaSnapshot {
   takenAt: string;
+  /** the database the snapshot was taken of; missing in snapshots made before it existed */
+  database?: string | null;
   tables: SchemaTable[];
+}
+
+/**
+ * Snapshots that may be compared with the live schema of `database`: never one of another database.
+ * Old snapshots without a database come from the file of this database, so they stay.
+ */
+export function snapshotsFor(snapshots: SchemaSnapshot[], database: string | null): SchemaSnapshot[] {
+  return snapshots.filter((s) => s.database == null || s.database === database);
 }
 
 export type Change = 'added' | 'removed' | 'changed';

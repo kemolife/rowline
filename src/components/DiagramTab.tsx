@@ -191,7 +191,9 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
             data: { table: t, columns, color: OTHER_COLOR, dim: false, focus: false, active: [] },
           })),
         );
-        requestAnimationFrame(() => flow.fitView({ padding: 0.12, maxZoom: 1 }));
+        // fit the tables that exist now; removed tables (from the snapshot) may lie outside the view
+        const current = sized.filter(({ t }) => t.change !== 'removed').map(({ t }) => ({ id: t.name }));
+        requestAnimationFrame(() => flow.fitView({ padding: 0.12, maxZoom: 1, ...(current.length ? { nodes: current } : {}) }));
       })
       .finally(() => seq === layoutSeq.current && setLaying(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps

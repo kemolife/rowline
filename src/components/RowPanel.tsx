@@ -32,7 +32,7 @@ interface Props {
 }
 
 /** Right panel: all fields of the selected row, editable like TablePlus. */
-export default function RowPanel({ columns, structure, row, selectedCount, getValue, rowState, editable, engine, onChange, isEdited, rowLabel, pending, onSave, onDiscard, referencedBy = [] }: Props) {
+export default function RowPanel({ columns, structure, row, selectedCount, getValue, rowState, editable, engine, onChange, isEdited, rowLabel, referencedBy = [] }: Props) {
   const [filter, setFilter] = useState('');
   const info = useMemo(() => new Map(structure?.columns.map((c) => [c.name, c]) ?? []), [structure]);
   const fkColumns = useMemo(() => new Set(structure?.foreignKeys.filter((f) => f.columns.length === 1).map((f) => f.columns[0]) ?? []), [structure]);
@@ -99,19 +99,6 @@ export default function RowPanel({ columns, structure, row, selectedCount, getVa
               ))}
             </div>
           )}
-        </div>
-      )}
-      {pending > 0 && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface-2/60 px-3 py-2">
-          <span className="flex-1 text-[12px] text-ink-2">
-            {pending} unsaved {pending === 1 ? 'change' : 'changes'}
-          </span>
-          <button className="btn btn-ghost h-7" onClick={onDiscard}>
-            Discard
-          </button>
-          <button className="btn btn-primary h-7" onClick={onSave}>
-            Save
-          </button>
         </div>
       )}
     </aside>

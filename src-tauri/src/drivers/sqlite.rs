@@ -236,9 +236,23 @@ impl SqliteSession {
         self.with_conn(move |c| {
             let mut results = Vec::new();
             for st in sqlgen::split_statements(&sql) {
-                let mut res = run_query(c, &st.text, &[], max_rows)?;
-                res.statement = Some(st.text);
-                results.push(res);
+                match run_query(c, &st.text, &[], max_rows) {
+                    Ok(mut res) => {
+                        res.statement = Some(st.text);
+                        results.push(res);
+                    }
+                    // nothing ran yet: a plain error, as for a single statement
+                    Err(e) if results.is_empty() => return Err(e),
+                    // keep the results so far, show the error as the result of this statement, and stop
+                    Err(e) => {
+                        let message = match e {
+                            AppError::Sqlite(e) => e.to_string(),
+                            other => other.to_string(),
+                        };
+                        results.push(QueryResult::failed(st.text, message));
+                        break;
+                    }
+                }
             }
             Ok(results)
         })
@@ -383,7 +397,7 @@ fn run_query(c: &Connection, sql: &str, params: &[rusqlite::types::Value], max_r
         }
         rows_out.push(out);
     }
-    Ok(QueryResult { columns, rows: rows_out, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, statement: None })
+    Ok(QueryResult { columns, rows: rows_out, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, ..Default::default() })
 }
 
 pub(crate) fn sqlite_to_json(v: ValueRef) -> Value {
@@ -553,6 +567,23 @@ mod tests {
         assert_eq!(res[1].rows, vec![vec![json!(3)]]);
         assert_eq!(res[2].rows.len(), 1);
         assert!(res[2].truncated);
+    }
+
+    #[tokio::test]
+    async fn a_failing_statement_keeps_the_results_before_it_and_stops() {
+        let (_d, s) = test_db().await;
+        let res = s.execute("SELECT 1; SELECT * FROM nope; SELECT 3".into(), 10).await.unwrap();
+        assert_eq!(res.len(), 2, "stops after the error");
+        assert_eq!(res[0].rows, vec![vec![json!(1)]]);
+        assert_eq!(res[0].error, None);
+        assert_eq!(res[1].statement.as_deref(), Some("SELECT * FROM nope"));
+        assert_eq!(res[1].error.as_deref(), Some("no such table: nope"));
+        // the error entry is sent to the UI as `error`; results without one have no such field
+        let sent = serde_json::to_value(&res).unwrap();
+        assert_eq!(sent[1]["error"], json!("no such table: nope"));
+        assert!(sent[0].get("error").is_none());
+        // a script that fails at once is a plain error
+        assert!(s.execute("SELECT * FROM nope; SELECT 1".into(), 10).await.is_err());
     }
 
     #[tokio::test]

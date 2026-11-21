@@ -51,9 +51,19 @@ impl MysqlSession {
         }
         let mut results = Vec::new();
         for st in sqlgen::split_statements(sql) {
-            let mut res = self.run_tracked(&mut c, &st.text, max_rows).await?;
-            res.statement = Some(st.text);
-            results.push(res);
+            match self.run_tracked(&mut c, &st.text, max_rows).await {
+                Ok(mut res) => {
+                    res.statement = Some(st.text);
+                    results.push(res);
+                }
+                // nothing ran yet: a plain error, as for a single statement
+                Err(e) if results.is_empty() => return Err(e),
+                // keep the results so far, show the error as the result of this statement, and stop
+                Err(e) => {
+                    results.push(QueryResult::failed(st.text, statement_error(&e)));
+                    break;
+                }
+            }
         }
         Ok(results)
     }
@@ -61,6 +71,8 @@ impl MysqlSession {
     /// Runs one statement inside a READ ONLY transaction, limited to readonly::TIMEOUT.
     pub async fn select_read_only(&self, database: Option<&str>, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
         let timeout = crate::readonly::TIMEOUT;
+        // `FROM user` with database `mysql` would read mysql.user without naming it
+        crate::readonly::blocked_database(self.db(database))?;
         let mut c = self.conn().await?;
         if let Some(db) = self.db(database) {
             c.query_drop(format!("USE {}", Dialect::Mysql.quote_ident(db))).await?;
@@ -71,7 +83,7 @@ impl MysqlSession {
         let thread_id = c.id();
         // Untracked on purpose: dropping run_tracked on timeout would leave this thread id in `running`,
         // and a later editor cancel() would then KILL QUERY an unrelated query on the pooled connection.
-        let res = match tokio::time::timeout(timeout + std::time::Duration::from_secs(2), run_query(&mut c, sql, max_rows)).await {
+        let res = match tokio::time::timeout(timeout + std::time::Duration::from_secs(2), run_query(&mut c, sql, max_rows, Some(self))).await {
             // 3024 = MAX_EXECUTION_TIME reached: same message as the other timeout paths
             Ok(Err(AppError::Mysql(mysql_async::Error::Server(e)))) if e.code == 3024 => {
                 Err(AppError::Timeout(format!("the query ran longer than {} s", timeout.as_secs())))
@@ -104,9 +116,14 @@ impl MysqlSession {
         Ok(total)
     }
 
-    /// Stops queries started by this session (KILL QUERY on a separate connection).
-    pub async fn cancel(&self) -> AppResult<()> {
-        let ids: Vec<u32> = self.running.lock().map(|r| r.clone()).unwrap_or_default();
+    /// Stops queries started by this session (KILL QUERY on a separate connection):
+    /// those of one tab with `owner`, else all of them.
+    pub async fn cancel(&self, owner: Option<&str>) -> AppResult<()> {
+        let ids: Vec<u32> = self
+            .running
+            .lock()
+            .map(|r| r.iter().filter(|(_, o)| owner.is_none() || o.as_deref() == owner).map(|(id, _)| *id).collect())
+            .unwrap_or_default();
         if ids.is_empty() {
             return Ok(());
         }
@@ -119,26 +136,44 @@ impl MysqlSession {
 
     async fn run_tracked(&self, c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
         let id = c.id();
-        self.tracked(id, run_query(c, sql, max_rows)).await
+        self.tracked(id, run_query(c, sql, max_rows, Some(self))).await
     }
 
-    /// Runs `work` with server thread `id` in `running`, so cancel() can KILL QUERY it.
+    /// Runs `work` with server thread `id` in `running` (owned by the current tab, see `owner`),
+    /// so cancel() can KILL QUERY it. The entry goes away even when `work` is dropped half way.
     async fn tracked<T>(&self, id: u32, work: impl std::future::Future<Output = T>) -> T {
-        if let Ok(mut r) = self.running.lock() {
-            r.push(id);
-        }
-        let res = work.await;
-        if let Ok(mut r) = self.running.lock() {
-            if let Some(i) = r.iter().position(|x| *x == id) {
-                r.remove(i);
+        struct Entry<'a>(&'a MysqlSession, u32);
+        impl Drop for Entry<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut r) = self.0.running.lock() {
+                    if let Some(i) = r.iter().position(|(x, _)| *x == self.1) {
+                        r.remove(i);
+                    }
+                }
             }
         }
-        res
+        if let Ok(mut r) = self.running.lock() {
+            r.push((id, crate::owner::current()));
+        }
+        let _entry = Entry(self, id);
+        work.await
     }
 }
 
-async fn run_query(c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryResult> {
+/// The error of one statement without the driver's wrapper text:
+/// "MySQL: Server error: `ERROR 1146 (42S02): Table 'shop.nope' doesn't exist'" becomes "ERROR 1146 (42S02): Table 'shop.nope' doesn't exist".
+fn statement_error(e: &AppError) -> String {
+    match e {
+        AppError::Mysql(mysql_async::Error::Server(s)) => format!("ERROR {} ({}): {}", s.code, s.state, s.message),
+        other => other.to_string(),
+    }
+}
+
+/// Runs one statement and reads at most `max_rows` rows. With `killer`, a result that is longer is stopped
+/// on the server (KILL QUERY from a second connection) instead of being read to the end and thrown away.
+async fn run_query(c: &mut Conn, sql: &str, max_rows: usize, killer: Option<&MysqlSession>) -> AppResult<QueryResult> {
     let start = Instant::now();
+    let thread_id = c.id();
     let mut qr = c.query_iter(sql).await?;
     let cols: Vec<Column> = qr.columns_ref().to_vec();
     if cols.is_empty() {
@@ -152,16 +187,25 @@ async fn run_query(c: &mut Conn, sql: &str, max_rows: usize) -> AppResult<QueryR
         .collect();
     let mut rows = Vec::new();
     let mut truncated = false;
-    qr.for_each(|row: Row| {
+    while let Some(row) = qr.next().await? {
         if rows.len() >= max_rows {
             truncated = true;
-            return;
+            break;
         }
+        let row: Row = row;
         let values = row.unwrap();
         rows.push(values.iter().zip(cols.iter()).map(|(v, col)| mysql_to_json(v, col)).collect());
-    })
-    .await?;
-    Ok(QueryResult { columns, rows, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, statement: None })
+    }
+    if truncated {
+        if let Some(s) = killer {
+            if let Ok(mut k) = s.conn().await {
+                let _ = k.query_drop(format!("KILL QUERY {thread_id}")).await;
+            }
+        }
+        // what the server already sent still has to be read; after the kill it ends with "interrupted"
+        while let Ok(Some(_)) = qr.next().await {}
+    }
+    Ok(QueryResult { columns, rows, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, ..Default::default() })
 }
 
 #[cfg(test)]
@@ -188,6 +232,17 @@ mod tests {
         assert_eq!(res[0].rows[0], vec![json!("dflt"), json!(1), json!(1)]);
         assert_eq!(res[0].rows[1][0], json!("dflt"));
         s.execute(Some(&db), "DROP TABLE rowline_expr_test", 10).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failing_statement_keeps_the_results_before_it() {
+        let Some((s, db)) = session().await else { return };
+        let res = s.execute(Some(&db), "SELECT 1; SELECT 2; SELECT * FROM rowline_test_missing; SELECT 4", 10).await.unwrap();
+        assert_eq!(res.len(), 3, "stops after the error");
+        assert_eq!((res[0].rows[0][0].clone(), res[1].rows[0][0].clone()), (json!(1), json!(2)));
+        assert_eq!(res[2].statement.as_deref(), Some("SELECT * FROM rowline_test_missing"));
+        assert_eq!(res[2].error.as_deref(), Some(format!("ERROR 1146 (42S02): Table '{db}.rowline_test_missing' doesn't exist").as_str()));
+        assert!(s.execute(Some(&db), "SELECT * FROM rowline_test_missing", 10).await.is_err());
     }
 
     #[tokio::test]
@@ -282,13 +337,54 @@ mod tests {
         let handle = tokio::spawn(async move { s2.execute(Some(&db2), "SELECT SLEEP(20)", 10).await });
         tokio::time::sleep(Duration::from_millis(500)).await;
         let start = Instant::now();
-        s.cancel().await.unwrap();
+        s.cancel(None).await.unwrap();
         let res = handle.await.unwrap();
         assert!(start.elapsed() < Duration::from_secs(5), "cancel took too long");
         // SLEEP returns 1 when interrupted, or the query errors — either way it ended early
         if let Ok(r) = res {
             assert_eq!(r[0].rows[0][0], json!(1));
         }
+    }
+
+    #[tokio::test]
+    async fn cancel_with_an_owner_stops_only_that_tab() {
+        let Some((s, db)) = session().await else { return };
+        let s = std::sync::Arc::new(s);
+        let run = |owner: &'static str, secs: u32| {
+            let (s, db) = (s.clone(), db.clone());
+            tokio::spawn(crate::owner::scope(Some(owner.into()), async move { s.execute(Some(&db), &format!("SELECT SLEEP({secs}) AS z"), 1).await }))
+        };
+        let a = run("tab-a", 20);
+        let b = run("tab-b", 2);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let start = Instant::now();
+        s.cancel(Some("tab-a")).await.unwrap();
+        let ra = a.await.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(3), "tab-a was not stopped");
+        if let Ok(r) = ra {
+            assert_eq!(r[0].rows[0][0], json!(1), "SLEEP returns 1 when killed");
+        }
+        // tab-b ran to the end: SLEEP returns 0 when not interrupted
+        assert_eq!(b.await.unwrap().unwrap()[0].rows[0][0], json!(0));
+        assert!(s.running.lock().unwrap().is_empty(), "nothing left in the running list");
+    }
+
+    #[tokio::test]
+    async fn stops_reading_at_the_row_limit() {
+        let Some((s, db)) = session().await else { return };
+        let t = "rowline_test_many_rows";
+        s.execute(Some(&db), &format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id INT PRIMARY KEY); INSERT INTO {t} WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) SELECT i FROM n"), 1).await.unwrap();
+        // a table scan of big rows streams (small rows sit in the 16 KB net buffer); all 1,000 at 10 ms would take 10 s
+        let slow = format!("SELECT id, REPEAT('x', 4000) AS pad, SLEEP(0.01) AS z FROM {t}");
+        let start = Instant::now();
+        let r = s.execute(Some(&db), &format!("{slow}; SELECT 2 AS after"), 5).await.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(4), "read past the limit: {:?}", start.elapsed());
+        assert_eq!(r[0].rows.len(), 5);
+        assert!(r[0].truncated);
+        assert_eq!(r[1].rows[0][0], json!(2), "the next statement on the same connection still works");
+        // and the pooled connection is fine afterwards
+        assert_eq!(s.execute(Some(&db), "SELECT 3", 1).await.unwrap()[0].rows[0][0], json!(3));
+        s.execute(Some(&db), &format!("DROP TABLE {t}"), 1).await.unwrap();
     }
 
     #[tokio::test]
@@ -306,7 +402,7 @@ mod tests {
         let handle = tokio::spawn(async move { s2.count(slow).await });
         tokio::time::sleep(Duration::from_millis(500)).await;
         let start = Instant::now();
-        s.cancel().await.unwrap();
+        s.cancel(None).await.unwrap();
         let _ = handle.await.unwrap();
         assert!(start.elapsed() < Duration::from_secs(5), "cancel did not stop the count");
         s.execute(Some(&db), &format!("DROP TABLE {t}"), 1).await.unwrap();

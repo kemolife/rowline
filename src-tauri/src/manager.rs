@@ -123,9 +123,10 @@ impl Session {
         }
     }
 
-    pub async fn cancel(&self) -> AppResult<()> {
+    /// Stops running queries: only those of tab `owner` when given (MySQL; SQLite runs one query at a time).
+    pub async fn cancel(&self, owner: Option<&str>) -> AppResult<()> {
         match self {
-            Session::Mysql(s) => s.cancel().await,
+            Session::Mysql(s) => s.cancel(owner).await,
             Session::Sqlite(s) => {
                 s.cancel();
                 Ok(())

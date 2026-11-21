@@ -33,7 +33,7 @@ export default function ColumnsMenu({ columns, hidden, onChange }: Props) {
         title="Choose the columns to show"
         data-testid="columns-button"
       >
-        <Columns3 size={13} /> Columns
+        <Columns3 size={13} /> <span className="@max-[820px]:hidden">Columns</span>
         {hiddenNow.length > 0 && (
           <span className="tabular-nums" data-testid="columns-count">
             {shown}/{columns.length}
