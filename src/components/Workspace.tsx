@@ -63,12 +63,8 @@ export default function Workspace({ active }: { active: boolean }) {
     };
   }, [cid]);
 
-  const prod = useWs((w) => w.session.config.environment === 'prod');
-
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      {/* Production: a red frame around the whole window, so it is never mistaken for dev */}
-      {prod && active && <div className="pointer-events-none fixed inset-0 z-[900] shadow-[inset_0_0_0_3px_var(--env-prod)]" data-testid="prod-frame" />}
       <Header trafficLightSpace={isTauri && isMac} />
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && <Sidebar />}
