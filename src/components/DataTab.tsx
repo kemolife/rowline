@@ -95,7 +95,11 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const columnTypes = useMemo(() => Object.fromEntries(structure?.columns.map((c) => [c.name, c.dataType]) ?? []), [structure]);
   const filter = filterMode === 'sql' ? (tab.sqlFilter ?? '').trim() : (compileFilter(rules, session.config.engine, columnTypes) ?? '');
 
-  const load = useCallback(async () => {
+  // the row count runs once per table and filter (not on every page or sort change); Refresh and Save recount
+  const countedFor = useRef<string | null>(null);
+  const countSeq = useRef(0);
+
+  const load = useCallback(async (recount = false) => {
     const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
@@ -107,15 +111,20 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       setSelectedRows([]);
       gridRef.current?.clearSelection();
       // total in the background; large tables can take a moment
-      setTotal(null);
-      setCounting(true);
-      api
-        .countRows(id, request, tab.id)
-        .then((n) => seq === loadSeq.current && setTotal(n))
-        .catch(() => undefined)
-        .finally(() => seq === loadSeq.current && setCounting(false));
       const key = `${id}/${database ?? ''}/${tab.table}`;
-      if (filter && tableTotal?.key !== key)
+      const countKey = `${key}/${filter}`;
+      if (recount || countedFor.current !== countKey) {
+        countedFor.current = countKey;
+        const cs = ++countSeq.current;
+        setTotal(null);
+        setCounting(true);
+        api
+          .countRows(id, request, tab.id)
+          .then((n) => cs === countSeq.current && setTotal(n))
+          .catch(() => undefined)
+          .finally(() => cs === countSeq.current && setCounting(false));
+      }
+      if (filter && (recount || tableTotal?.key !== key))
         api
           .countRows(id, { ...request, filter: null }, tab.id)
           .then((n) => setTableTotal({ key, n }))
@@ -283,7 +292,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       setReview(null);
       setHistory(emptyHistory());
       toast(`Saved · ${n} row${n === 1 ? '' : 's'} affected`, 'success');
-      await load();
+      await load(true);
     } catch (e) {
       toast((e as Error).message, 'error');
     } finally {
@@ -300,6 +309,8 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const cancel = async () => {
     const wasLoading = loading;
     loadSeq.current++;
+    countSeq.current++;
+    countedFor.current = null;
     setLoading(false);
     setCounting(false);
     if (wasLoading) setError('Cancelled. The rows were not loaded.');
@@ -309,7 +320,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const refresh = async () => {
     if (pending && !(await confirmDialog('Refreshing discards unsaved changes. Continue?'))) return;
     setHistory(emptyHistory());
-    load();
+    load(true);
   };
 
   // keyboard shortcuts while this tab is visible
@@ -486,7 +497,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
         </Toolbar>
 
         {error ? (
-          <CenteredState error={error} onRetry={load} />
+          <CenteredState error={error} onRetry={() => load(true)} />
         ) : !result ? (
           <CenteredState loading />
         ) : (
