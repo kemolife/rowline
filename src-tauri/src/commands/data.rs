@@ -128,7 +128,8 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
                 sql: a.sql.clone(),
                 executed_at: chrono::Utc::now(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
-                ok: res.is_ok(),
+                // a script that stopped at a failing statement still returns the results before it
+                ok: res.as_ref().is_ok_and(|r| r.iter().all(|q| q.error.is_none())),
                 source: None,
                 error: None,
                 rows: None,

@@ -111,6 +111,8 @@ export interface QueryResult {
   elapsedMs: number;
   truncated: boolean;
   statement: string | null;
+  /** the statement failed: a script keeps the results before it and stops here */
+  error?: string;
 }
 
 export type RowValues = Record<string, Cell>;

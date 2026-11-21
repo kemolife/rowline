@@ -51,9 +51,19 @@ impl MysqlSession {
         }
         let mut results = Vec::new();
         for st in sqlgen::split_statements(sql) {
-            let mut res = self.run_tracked(&mut c, &st.text, max_rows).await?;
-            res.statement = Some(st.text);
-            results.push(res);
+            match self.run_tracked(&mut c, &st.text, max_rows).await {
+                Ok(mut res) => {
+                    res.statement = Some(st.text);
+                    results.push(res);
+                }
+                // nothing ran yet: a plain error, as for a single statement
+                Err(e) if results.is_empty() => return Err(e),
+                // keep the results so far, show the error as the result of this statement, and stop
+                Err(e) => {
+                    results.push(QueryResult::failed(st.text, statement_error(&e)));
+                    break;
+                }
+            }
         }
         Ok(results)
     }
@@ -150,6 +160,15 @@ impl MysqlSession {
     }
 }
 
+/// The error of one statement without the driver's wrapper text:
+/// "MySQL: Server error: `ERROR 1146 (42S02): Table 'shop.nope' doesn't exist'" becomes "ERROR 1146 (42S02): Table 'shop.nope' doesn't exist".
+fn statement_error(e: &AppError) -> String {
+    match e {
+        AppError::Mysql(mysql_async::Error::Server(s)) => format!("ERROR {} ({}): {}", s.code, s.state, s.message),
+        other => other.to_string(),
+    }
+}
+
 /// Runs one statement and reads at most `max_rows` rows. With `killer`, a result that is longer is stopped
 /// on the server (KILL QUERY from a second connection) instead of being read to the end and thrown away.
 async fn run_query(c: &mut Conn, sql: &str, max_rows: usize, killer: Option<&MysqlSession>) -> AppResult<QueryResult> {
@@ -186,7 +205,7 @@ async fn run_query(c: &mut Conn, sql: &str, max_rows: usize, killer: Option<&Mys
         // what the server already sent still has to be read; after the kill it ends with "interrupted"
         while let Ok(Some(_)) = qr.next().await {}
     }
-    Ok(QueryResult { columns, rows, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, statement: None })
+    Ok(QueryResult { columns, rows, affected_rows: None, elapsed_ms: start.elapsed().as_millis() as u64, truncated, ..Default::default() })
 }
 
 #[cfg(test)]
@@ -213,6 +232,17 @@ mod tests {
         assert_eq!(res[0].rows[0], vec![json!("dflt"), json!(1), json!(1)]);
         assert_eq!(res[0].rows[1][0], json!("dflt"));
         s.execute(Some(&db), "DROP TABLE rowline_expr_test", 10).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failing_statement_keeps_the_results_before_it() {
+        let Some((s, db)) = session().await else { return };
+        let res = s.execute(Some(&db), "SELECT 1; SELECT 2; SELECT * FROM rowline_test_missing; SELECT 4", 10).await.unwrap();
+        assert_eq!(res.len(), 3, "stops after the error");
+        assert_eq!((res[0].rows[0][0].clone(), res[1].rows[0][0].clone()), (json!(1), json!(2)));
+        assert_eq!(res[2].statement.as_deref(), Some("SELECT * FROM rowline_test_missing"));
+        assert_eq!(res[2].error.as_deref(), Some(format!("ERROR 1146 (42S02): Table '{db}.rowline_test_missing' doesn't exist").as_str()));
+        assert!(s.execute(Some(&db), "SELECT * FROM rowline_test_missing", 10).await.is_err());
     }
 
     #[tokio::test]
