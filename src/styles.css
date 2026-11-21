@@ -108,6 +108,79 @@
   color-scheme: dark;
 }
 
+/* Warm style (beige and terracotta, the first look of the app). Chosen in the footer of the start screen or ⌘K.
+   Comes after the blue blocks; the dark rules have one more attribute, so they win over the light one. */
+:root[data-style='warm'] {
+  --bg: #faf9f5;
+  --surface: #ffffff;
+  --surface-2: #f4f2ec;
+  --surface-3: #ebe8df;
+  --border: #e6e3d9;
+  --border-strong: #d5d1c4;
+  --text: #1f1e1d;
+  --text-2: #5e5d58;
+  --text-3: #8f8d86;
+  --accent: #c96442;
+  --accent-hover: #b4583a;
+  --accent-soft: #f6e6df;
+  --accent-text: #ffffff;
+  --selection: #f3dfd5;
+  --null: #a8a59c;
+  --null-faint: #c9c4ba;
+  --sel: #e8f0fb;
+  --sel-strong: #4a7fc4;
+  --link: #2f62a6;
+  --badge-fk: #e3ecf8;
+  --shadow: 0 1px 2px rgba(31, 30, 29, 0.06), 0 4px 16px rgba(31, 30, 29, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-style='warm']:not([data-theme='light']) {
+    --bg: #1c1b19;
+    --surface: #242321;
+    --surface-2: #2b2a27;
+    --surface-3: #34332f;
+    --border: #363531;
+    --border-strong: #46443f;
+    --text: #f2f0e9;
+    --text-2: #b9b6ad;
+    --text-3: #85827a;
+    --accent: #d97757;
+    --accent-hover: #e38a6c;
+    --accent-soft: #3d2a22;
+    --accent-text: #1c1b19;
+    --selection: #4a3127;
+    --null: #6f6c65;
+    --null-faint: #5a5751;
+    --sel: #22314a;
+    --sel-strong: #6f9fe0;
+    --link: #8db4ec;
+    --badge-fk: #26344a;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+:root[data-style='warm'][data-theme='dark'] {
+  --bg: #1c1b19;
+  --surface: #242321;
+  --surface-2: #2b2a27;
+  --surface-3: #34332f;
+  --border: #363531;
+  --border-strong: #46443f;
+  --text: #f2f0e9;
+  --text-2: #b9b6ad;
+  --text-3: #85827a;
+  --accent: #d97757;
+  --accent-hover: #e38a6c;
+  --accent-soft: #3d2a22;
+  --accent-text: #1c1b19;
+  --selection: #4a3127;
+  --null: #6f6c65;
+  --null-faint: #5a5751;
+  --sel: #22314a;
+  --sel-strong: #6f9fe0;
+  --link: #8db4ec;
+  --badge-fk: #26344a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);

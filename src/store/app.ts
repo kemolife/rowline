@@ -6,6 +6,8 @@ import { effectiveProjects, insertGrouped, type ProjectInfo } from '../lib/proje
 import type { ConnectionConfig, ConnectionInput, DbObject, ObjectKind, ServerInfo, SortSpec } from '../lib/types';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+/** color style, independent of light/dark: blue (default) or warm (beige and terracotta) */
+export type ColorStyle = 'blue' | 'warm';
 
 export interface TableTab {
   id: string;
@@ -89,6 +91,7 @@ export interface Toast {
 
 export interface AppState {
   theme: ThemeMode;
+  colorStyle: ColorStyle;
   connections: ConnectionConfig[];
   connecting: string | null;
   workspaces: Record<string, Workspace>;
@@ -105,6 +108,7 @@ export interface AppState {
   toasts: Toast[];
 
   setTheme: (t: ThemeMode) => void;
+  setColorStyle: (s: ColorStyle) => void;
   loadConnections: () => Promise<void>;
   connect: (id: string) => Promise<void>;
   /** After a connection was saved: updates an open workspace and offers to reconnect when needed. */
@@ -153,6 +157,14 @@ export interface AppState {
 let toastId = 0;
 let tabId = 0;
 const newTabId = () => `tab-${++tabId}`;
+
+const readColorStyle = (): ColorStyle => {
+  try {
+    return localStorage.getItem('rowline.style') === 'warm' ? 'warm' : 'blue';
+  } catch {
+    return 'blue';
+  }
+};
 
 const readTheme = (): ThemeMode => {
   try {
@@ -206,6 +218,7 @@ export const useApp = create<AppState>((set, get) => {
 
   return {
     theme: readTheme(),
+    colorStyle: readColorStyle(),
     connections: [],
     connecting: null,
     workspaces: {},
@@ -231,6 +244,16 @@ export const useApp = create<AppState>((set, get) => {
       // switch the page colors before React re-renders: the data grid reads the CSS colors while rendering
       applyThemeAttribute(theme);
       set({ theme });
+    },
+
+    setColorStyle: (colorStyle) => {
+      try {
+        localStorage.setItem('rowline.style', colorStyle);
+      } catch {
+        /* storage not available */
+      }
+      applyColorStyle(colorStyle);
+      set({ colorStyle });
     },
 
     loadConnections: async () => {
@@ -558,6 +581,13 @@ export function needsReconnect(a: ConnectionConfig, b: ConnectionConfig): boolea
 }
 
 /** Sets the light/dark colors on the page (CSS variables follow `data-theme`; "system" follows macOS). */
+/** data-style on <html>: 'warm' switches the CSS colors (see styles.css); blue needs no attribute */
+export function applyColorStyle(style: ColorStyle) {
+  if (typeof document === 'undefined') return;
+  if (style === 'warm') document.documentElement.setAttribute('data-style', 'warm');
+  else document.documentElement.removeAttribute('data-style');
+}
+
 export function applyThemeAttribute(theme: ThemeMode) {
   if (typeof document === 'undefined') return;
   if (theme === 'system') document.documentElement.removeAttribute('data-theme');

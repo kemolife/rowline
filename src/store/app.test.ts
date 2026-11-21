@@ -288,3 +288,16 @@ describe('projects in the rail', () => {
   });
 });
 
+
+describe('color style', () => {
+  it('is saved and switches the data-style attribute, apart from light/dark', () => {
+    useApp.getState().setColorStyle('warm');
+    expect(document.documentElement.getAttribute('data-style')).toBe('warm');
+    expect(localStorage.getItem('rowline.style')).toBe('warm');
+    useApp.getState().setTheme('light');
+    expect(document.documentElement.getAttribute('data-style')).toBe('warm');
+    useApp.getState().setColorStyle('blue');
+    expect(document.documentElement.hasAttribute('data-style')).toBe(false);
+    expect(useApp.getState().colorStyle).toBe('blue');
+  });
+});

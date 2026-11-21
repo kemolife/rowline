@@ -1,5 +1,5 @@
 import { installCli } from '../lib/cliInstall';
-import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Palette, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
 import { tlsWarning } from '../lib/tls';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -67,6 +67,8 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
   const toast = useApp((s) => s.toast);
   const theme = useApp((s) => s.theme);
   const setTheme = useApp((s) => s.setTheme);
+  const colorStyle = useApp((s) => s.colorStyle);
+  const setColorStyle = useApp((s) => s.setColorStyle);
   const [query, setQuery] = useState('');
   const projects = useProjects();
 
@@ -224,6 +226,14 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
         <div className="flex-1" />
         <button className="btn btn-ghost h-7" onClick={installCli} title="Put the rowline command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line
+        </button>
+        <button
+          className="btn btn-ghost h-7"
+          onClick={() => setColorStyle(colorStyle === 'blue' ? 'warm' : 'blue')}
+          title={`Style: ${colorStyle === 'blue' ? 'Blue' : 'Warm'}. Click to switch.`}
+          data-testid="style-toggle"
+        >
+          <Palette size={14} /> {colorStyle === 'blue' ? 'Blue' : 'Warm'}
         </button>
         <button className="btn btn-ghost h-7" onClick={() => setTheme(nextTheme)} title={`Theme: ${theme}`}>
           <ThemeIcon size={14} /> {theme === 'system' ? 'System' : theme === 'light' ? 'Light' : 'Dark'}
