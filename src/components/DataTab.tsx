@@ -101,7 +101,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     setError(null);
     const request = { database, table: tab.table, filter: filter || null, sort, limit, offset };
     try {
-      const res = await api.selectPage(id, request);
+      const res = await api.selectPage(id, request, tab.id);
       if (seq !== loadSeq.current) return;
       setResult(res);
       setSelectedRows([]);
@@ -110,14 +110,14 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       setTotal(null);
       setCounting(true);
       api
-        .countRows(id, request)
+        .countRows(id, request, tab.id)
         .then((n) => seq === loadSeq.current && setTotal(n))
         .catch(() => undefined)
         .finally(() => seq === loadSeq.current && setCounting(false));
       const key = `${id}/${database ?? ''}/${tab.table}`;
       if (filter && tableTotal?.key !== key)
         api
-          .countRows(id, { ...request, filter: null })
+          .countRows(id, { ...request, filter: null }, tab.id)
           .then((n) => setTableTotal({ key, n }))
           .catch(() => undefined);
     } catch (e) {
@@ -126,7 +126,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       if (seq === loadSeq.current) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tableTotal only skips a repeated count
-  }, [id, database, tab.table, filter, sort, limit, offset]);
+  }, [id, database, tab.id, tab.table, filter, sort, limit, offset]);
 
   useEffect(() => {
     if (tab.view === 'data') load();
@@ -303,7 +303,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     setLoading(false);
     setCounting(false);
     if (wasLoading) setError('Cancelled. The rows were not loaded.');
-    await api.cancelQuery(id).catch(() => undefined);
+    await api.cancelQuery(id, tab.id).catch(() => undefined);
   };
 
   const refresh = async () => {

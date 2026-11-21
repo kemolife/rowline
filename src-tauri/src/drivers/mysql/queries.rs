@@ -106,9 +106,14 @@ impl MysqlSession {
         Ok(total)
     }
 
-    /// Stops queries started by this session (KILL QUERY on a separate connection).
-    pub async fn cancel(&self) -> AppResult<()> {
-        let ids: Vec<u32> = self.running.lock().map(|r| r.clone()).unwrap_or_default();
+    /// Stops queries started by this session (KILL QUERY on a separate connection):
+    /// those of one tab with `owner`, else all of them.
+    pub async fn cancel(&self, owner: Option<&str>) -> AppResult<()> {
+        let ids: Vec<u32> = self
+            .running
+            .lock()
+            .map(|r| r.iter().filter(|(_, o)| owner.is_none() || o.as_deref() == owner).map(|(id, _)| *id).collect())
+            .unwrap_or_default();
         if ids.is_empty() {
             return Ok(());
         }
@@ -124,18 +129,24 @@ impl MysqlSession {
         self.tracked(id, run_query(c, sql, max_rows, Some(self))).await
     }
 
-    /// Runs `work` with server thread `id` in `running`, so cancel() can KILL QUERY it.
+    /// Runs `work` with server thread `id` in `running` (owned by the current tab, see `owner`),
+    /// so cancel() can KILL QUERY it. The entry goes away even when `work` is dropped half way.
     async fn tracked<T>(&self, id: u32, work: impl std::future::Future<Output = T>) -> T {
-        if let Ok(mut r) = self.running.lock() {
-            r.push(id);
-        }
-        let res = work.await;
-        if let Ok(mut r) = self.running.lock() {
-            if let Some(i) = r.iter().position(|x| *x == id) {
-                r.remove(i);
+        struct Entry<'a>(&'a MysqlSession, u32);
+        impl Drop for Entry<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut r) = self.0.running.lock() {
+                    if let Some(i) = r.iter().position(|(x, _)| *x == self.1) {
+                        r.remove(i);
+                    }
+                }
             }
         }
-        res
+        if let Ok(mut r) = self.running.lock() {
+            r.push((id, crate::owner::current()));
+        }
+        let _entry = Entry(self, id);
+        work.await
     }
 }
 
@@ -296,13 +307,36 @@ mod tests {
         let handle = tokio::spawn(async move { s2.execute(Some(&db2), "SELECT SLEEP(20)", 10).await });
         tokio::time::sleep(Duration::from_millis(500)).await;
         let start = Instant::now();
-        s.cancel().await.unwrap();
+        s.cancel(None).await.unwrap();
         let res = handle.await.unwrap();
         assert!(start.elapsed() < Duration::from_secs(5), "cancel took too long");
         // SLEEP returns 1 when interrupted, or the query errors — either way it ended early
         if let Ok(r) = res {
             assert_eq!(r[0].rows[0][0], json!(1));
         }
+    }
+
+    #[tokio::test]
+    async fn cancel_with_an_owner_stops_only_that_tab() {
+        let Some((s, db)) = session().await else { return };
+        let s = std::sync::Arc::new(s);
+        let run = |owner: &'static str, secs: u32| {
+            let (s, db) = (s.clone(), db.clone());
+            tokio::spawn(crate::owner::scope(Some(owner.into()), async move { s.execute(Some(&db), &format!("SELECT SLEEP({secs}) AS z"), 1).await }))
+        };
+        let a = run("tab-a", 20);
+        let b = run("tab-b", 2);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let start = Instant::now();
+        s.cancel(Some("tab-a")).await.unwrap();
+        let ra = a.await.unwrap();
+        assert!(start.elapsed() < Duration::from_secs(3), "tab-a was not stopped");
+        if let Ok(r) = ra {
+            assert_eq!(r[0].rows[0][0], json!(1), "SLEEP returns 1 when killed");
+        }
+        // tab-b ran to the end: SLEEP returns 0 when not interrupted
+        assert_eq!(b.await.unwrap().unwrap()[0].rows[0][0], json!(0));
+        assert!(s.running.lock().unwrap().is_empty(), "nothing left in the running list");
     }
 
     #[tokio::test]
@@ -338,7 +372,7 @@ mod tests {
         let handle = tokio::spawn(async move { s2.count(slow).await });
         tokio::time::sleep(Duration::from_millis(500)).await;
         let start = Instant::now();
-        s.cancel().await.unwrap();
+        s.cancel(None).await.unwrap();
         let _ = handle.await.unwrap();
         assert!(start.elapsed() < Duration::from_secs(5), "cancel did not stop the count");
         s.execute(Some(&db), &format!("DROP TABLE {t}"), 1).await.unwrap();

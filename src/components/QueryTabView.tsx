@@ -105,7 +105,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       const startedAt = Date.now();
       let entry: Run;
       try {
-        const res = await api.executeSql(id, database, text, maxRows || NO_LIMIT);
+        const res = await api.executeSql(id, database, text, maxRows || NO_LIMIT, tab.id);
         entry = {
           id: ++runSeq,
           sql: text,
@@ -129,7 +129,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       });
       setRunning(false);
     },
-    [running, session.config.environment, id, database, maxRows, refreshObjects],
+    [running, session.config.environment, id, tab.id, database, maxRows, refreshObjects],
   );
 
   const run = useCallback(
@@ -184,11 +184,11 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
 
   const cancel = useCallback(async () => {
     try {
-      await api.cancelQuery(id);
+      await api.cancelQuery(id, tab.id);
     } catch (e) {
       toast((e as Error).message, 'error');
     }
-  }, [id, toast]);
+  }, [id, tab.id, toast]);
 
   const runRef = useRef(run);
   runRef.current = run;

@@ -61,15 +61,16 @@ export const api = {
   schemaColumns: (id: string, database: string | null) => call<Record<string, string[]>>('schema_columns', { id, database }),
   tableStructure: (id: string, database: string | null, table: string) =>
     call<TableStructure>('table_structure', { id, database, table }),
-  selectPage: (id: string, request: PageRequest) => call<QueryResult>('select_page', { id, request }),
-  countRows: (id: string, request: PageRequest) => call<number>('count_rows', { id, request }),
-  executeSql: (id: string, database: string | null, sql: string, maxRows?: number) =>
-    call<QueryResult[]>('execute_sql', { id, database, sql, maxRows }),
+  /** owner: the tab running it; Cancel in that tab stops only its queries */
+  selectPage: (id: string, request: PageRequest, owner?: string) => call<QueryResult>('select_page', { id, request, owner }),
+  countRows: (id: string, request: PageRequest, owner?: string) => call<number>('count_rows', { id, request, owner }),
+  executeSql: (id: string, database: string | null, sql: string, maxRows?: number, owner?: string) =>
+    call<QueryResult[]>('execute_sql', { id, database, sql, maxRows, owner }),
   previewChanges: (id: string, database: string | null, table: string, changes: ChangeSet) =>
     call<string[]>('preview_changes', { id, database, table, changes }),
   applyChanges: (id: string, database: string | null, table: string, changes: ChangeSet) =>
     call<number>('apply_changes', { id, database, table, changes }),
-  cancelQuery: (id: string) => call<boolean>('cancel_query', { id }),
+  cancelQuery: (id: string, owner?: string) => call<boolean>('cancel_query', { id, owner }),
   /** most common values of a column (filter suggestions); empty when the server is slow */
   commonValues: (id: string, database: string | null, table: string, column: string) => call<(string | number | null)[]>('common_values', { id, database, table, column }),
   listVirtualKeys: (connectionId: string, database: string | null) => call<VirtualKey[]>('list_virtual_keys', { connectionId, database }),

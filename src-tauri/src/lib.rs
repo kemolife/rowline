@@ -6,6 +6,7 @@ pub mod drivers;
 pub mod error;
 pub mod manager;
 pub mod model;
+pub mod owner;
 pub mod readonly;
 pub mod sqlgen;
 pub mod store;
