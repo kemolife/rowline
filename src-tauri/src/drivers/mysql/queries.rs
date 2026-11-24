@@ -60,7 +60,7 @@ impl MysqlSession {
                 Err(e) if results.is_empty() => return Err(e),
                 // keep the results so far, show the error as the result of this statement, and stop
                 Err(e) => {
-                    results.push(QueryResult::failed(st.text, statement_error(&e)));
+                    results.push(QueryResult::failed(st.text, e.to_string()));
                     break;
                 }
             }
@@ -157,15 +157,6 @@ impl MysqlSession {
         }
         let _entry = Entry(self, id);
         work.await
-    }
-}
-
-/// The error of one statement without the driver's wrapper text:
-/// "MySQL: Server error: `ERROR 1146 (42S02): Table 'shop.nope' doesn't exist'" becomes "ERROR 1146 (42S02): Table 'shop.nope' doesn't exist".
-fn statement_error(e: &AppError) -> String {
-    match e {
-        AppError::Mysql(mysql_async::Error::Server(s)) => format!("ERROR {} ({}): {}", s.code, s.state, s.message),
-        other => other.to_string(),
     }
 }
 

@@ -77,6 +77,7 @@ interface Palette {
 
 function useThemeKey() {
   const mode = useApp((s) => s.theme);
+  const style = useApp((s) => s.colorStyle);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
@@ -84,7 +85,7 @@ function useThemeKey() {
     mq?.addEventListener('change', fn);
     return () => mq?.removeEventListener('change', fn);
   }, []);
-  return `${mode}-${systemDark}`;
+  return `${mode}-${style}-${systemDark}`;
 }
 
 function useGridTheme(themeKey: string): { theme: Partial<Theme>; palette: Palette } {

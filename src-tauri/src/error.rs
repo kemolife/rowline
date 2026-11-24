@@ -6,7 +6,7 @@ pub enum AppError {
     Message(String),
     #[error("Connection not found or closed: {0}")]
     NotConnected(String),
-    #[error("MySQL: {0}")]
+    #[error("{}", mysql_text(.0))]
     Mysql(#[from] mysql_async::Error),
     #[error("SQLite: {0}")]
     Sqlite(#[from] rusqlite::Error),
@@ -16,6 +16,14 @@ pub enum AppError {
     Json(#[from] serde_json::Error),
     #[error("Timeout: {0}")]
     Timeout(String),
+}
+
+/// A server error as MySQL itself prints it ("ERROR 1054 (42S22): Unknown column …"); other driver errors keep a "MySQL:" prefix.
+fn mysql_text(e: &mysql_async::Error) -> String {
+    match e {
+        mysql_async::Error::Server(s) => format!("ERROR {} ({}): {}", s.code, s.state, s.message),
+        other => format!("MySQL: {other}"),
+    }
 }
 
 impl AppError {
@@ -35,3 +43,18 @@ impl Serialize for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mysql_server_errors_read_like_the_mysql_client() {
+        let e = AppError::from(mysql_async::Error::Server(mysql_async::ServerError {
+            code: 1054,
+            message: "Unknown column 'i.ds_monitoring_info_id' in 'field list'".into(),
+            state: "42S22".into(),
+        }));
+        assert_eq!(e.to_string(), "ERROR 1054 (42S22): Unknown column 'i.ds_monitoring_info_id' in 'field list'");
+    }
+}

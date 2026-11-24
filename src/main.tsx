@@ -6,10 +6,11 @@ import './styles.css';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
 import { disableAutocorrect } from './lib/noAutocorrect';
-import { applyThemeAttribute, useApp } from './store/app';
+import { applyColorStyle, applyThemeAttribute, useApp } from './store/app';
 
 // set the theme before the first paint, so the window does not flash light
 applyThemeAttribute(useApp.getState().theme);
+applyColorStyle(useApp.getState().colorStyle);
 disableAutocorrect();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

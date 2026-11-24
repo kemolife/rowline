@@ -36,11 +36,8 @@ export default function Header({ trafficLightSpace }: { trafficLightSpace: boole
         <button
           type="button"
           onClick={() => setEditing({ ...(savedConfig ?? session.config) })}
-          className="no-drag mono flex h-[26px] min-w-0 max-w-[760px] flex-1 items-center gap-2 rounded-lg border px-2.5 text-left text-[11.5px] hover:brightness-110"
-          style={{
-            borderColor: `color-mix(in srgb, ${envColor(env)} 35%, var(--border))`,
-            background: `color-mix(in srgb, ${envColor(env)} ${env === 'prod' ? 12 : 7}%, var(--surface))`,
-          }}
+          // neutral for every environment: the colored badge says which one it is
+          className="no-drag mono flex h-[26px] min-w-0 max-w-[760px] flex-1 items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-left text-[11.5px] hover:bg-surface-2"
           data-testid="connection-pill"
           title={`${ENV_LABEL[env]} · ${session.info.version} — click to edit the connection`}
         >
