@@ -16,8 +16,8 @@
   --accent-soft: #e2ecfa;
   --accent-text: #ffffff;
   --selection: #d9e6f8;
-  --danger: #c2413a;
-  --danger-soft: #fae3e1;
+  --danger: #d1435b;
+  --danger-soft: #fdecef;
   --success: #3f8a5c;
   --warning: #b7791f;
   --null: #a3abb8;
@@ -29,7 +29,7 @@
   --badge-fk: #e2ecf8;
   --edited: #fff3c9;
   --inserted: #e2f4e7;
-  --deleted: #fbe1df;
+  --deleted: #fce4e8;
   --env-local: #3f8a5c;
   --env-dev: #3b72c4;
   --env-staging: #c27c1a;
@@ -56,8 +56,8 @@
     --accent-soft: #1c2d48;
     --accent-text: #0d1420;
     --selection: #24395a;
-    --danger: #e0645c;
-    --danger-soft: #43211f;
+    --danger: #f0788a;
+    --danger-soft: #3a2029;
     --success: #6bbf8a;
     --warning: #e0a650;
     --null: #5f6878;
@@ -69,7 +69,7 @@
     --badge-fk: #22324a;
     --edited: #4a4120;
     --inserted: #21402c;
-    --deleted: #4a2523;
+    --deleted: #43222c;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
@@ -90,8 +90,8 @@
   --accent-soft: #1c2d48;
   --accent-text: #0d1420;
   --selection: #24395a;
-  --danger: #e0645c;
-  --danger-soft: #43211f;
+  --danger: #f0788a;
+  --danger-soft: #3a2029;
   --success: #6bbf8a;
   --warning: #e0a650;
   --null: #5f6878;
@@ -103,7 +103,7 @@
   --badge-fk: #22324a;
   --edited: #4a4120;
   --inserted: #21402c;
-  --deleted: #4a2523;
+  --deleted: #43222c;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
@@ -132,6 +132,9 @@
   --link: #2f62a6;
   --badge-fk: #e3ecf8;
   --shadow: 0 1px 2px rgba(31, 30, 29, 0.06), 0 4px 16px rgba(31, 30, 29, 0.06);
+  --danger: #c2413a;
+  --danger-soft: #fae3e1;
+  --deleted: #fbe1df;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-style='warm']:not([data-theme='light']) {
@@ -156,6 +159,9 @@
     --link: #8db4ec;
     --badge-fk: #26344a;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --danger: #e0645c;
+    --danger-soft: #43211f;
+    --deleted: #4a2523;
   }
 }
 :root[data-style='warm'][data-theme='dark'] {
@@ -180,6 +186,9 @@
   --link: #8db4ec;
   --badge-fk: #26344a;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --danger: #e0645c;
+  --danger-soft: #43211f;
+  --deleted: #4a2523;
 }
 @theme inline {
   --color-bg: var(--bg);
