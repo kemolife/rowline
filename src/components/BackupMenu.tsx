@@ -6,6 +6,7 @@ import { cx } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
 import { useApp } from '../store/app';
 import { useWs, useWsActions } from '../store/workspace';
+import AppearanceSwitches from './Appearance';
 
 /** "shop-2026-10-16-1042" */
 export function backupFileName(base: string, now = new Date()): string {
@@ -99,7 +100,9 @@ export default function BackupMenu() {
         <MoreHorizontal size={16} />
       </button>
       {open && (
-        <div className="fade-in absolute right-0 top-9 z-50 w-56 rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]">
+        <div className="fade-in absolute right-0 top-9 z-50 w-[300px] rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]">
+          <AppearanceSwitches stacked />
+          <div className="my-1 h-px bg-line" />
           <button className={item} onClick={() => start('backup')} data-testid="backup-database">
             <DatabaseBackup size={14} /> Backup database…
           </button>
