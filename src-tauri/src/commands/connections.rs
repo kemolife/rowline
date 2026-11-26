@@ -15,7 +15,7 @@ struct ActiveDatabaseArgs {
     database: Option<String>,
 }
 
-pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "connect", "disconnect", "set_active_database"];
+pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "list_databases_for", "connect", "disconnect", "set_active_database"];
 
 pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
     match command {
@@ -32,6 +32,18 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             let password = resolve_password(state, &input)?;
             let session = Session::open(&input.config, password.as_deref()).await?;
             ok(session.server_info().await?)
+        }
+        // the connection form: databases on the server, to pick one instead of typing it (form values, saved password)
+        "list_databases_for" => {
+            let input: ConnectionInput = parse(args)?;
+            let password = resolve_password(state, &input)?;
+            let mut config = input.config.clone();
+            // the list must not depend on the database typed so far (a wrong name would fail the login)
+            config.database = None;
+            let session = Session::open(&config, password.as_deref()).await?;
+            let mut names = session.databases().await?;
+            names.retain(|n| !matches!(n.as_str(), "information_schema" | "performance_schema" | "mysql" | "sys"));
+            ok(names)
         }
         "connect" => {
             let a: IdArgs = parse(args)?;
@@ -188,5 +200,29 @@ mod tests {
         std::fs::create_dir_all(cfg.join("claude-workdir")).unwrap();
         assert!(err(save(cfg.to_str().unwrap().into()).await).contains("settings folder"));
         assert!(err(save(cfg.join("claude-workdir").to_str().unwrap().into()).await).contains("settings folder"));
+    }
+}
+
+#[cfg(test)]
+mod database_list_tests {
+    use super::*;
+    use crate::commands::test_support::*;
+
+    #[tokio::test]
+    async fn the_form_lists_databases_without_system_ones() {
+        let Ok(v) = std::env::var("ROWLINE_TEST_MYSQL") else { return };
+        let p: Vec<&str> = v.splitn(5, ':').collect();
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(Store::new(dir.path().join("cfg"), SecretStore::file(dir.path().join("s.json"))).unwrap());
+        let form = json!({ "id": "", "name": "t", "engine": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "password": p[3], "database": "half_typed_nam" });
+        let list = dispatch(&state, "list_databases_for", form.clone()).await.unwrap();
+        let names: Vec<&str> = list.as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();
+        assert!(names.contains(&p[4]), "{names:?}");
+        assert!(!names.iter().any(|n| ["mysql", "sys", "information_schema", "performance_schema"].contains(n)), "{names:?}");
+
+        // a saved connection: the password field says "Saved" and is not sent again
+        let saved = dispatch(&state, "save_connection", form).await.unwrap();
+        let again = dispatch(&state, "list_databases_for", json!({ "id": saved["id"], "name": "t", "engine": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2] })).await.unwrap();
+        assert_eq!(again, list);
     }
 }
