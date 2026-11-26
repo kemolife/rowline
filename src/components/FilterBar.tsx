@@ -3,6 +3,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { createPortal } from 'react-dom';
 import type { FilterColumn } from '../lib/filterComplete';
 import { FILTER_OPS, NO_VALUE_OPS, RAW_SQL, enumValues, newRule, ruleLabel, type FilterOp, type FilterRule } from '../lib/filters';
+import ColumnPicker from './ColumnPicker';
 import { loadFilterUsage, rankColumns, rankOps, recordFilterUse, type FilterUsage } from '../lib/filterUsage';
 import type { Engine, SortSpec } from '../lib/types';
 import { MOD, cx } from '../lib/ui';
@@ -303,6 +304,7 @@ function RuleEditor({
     };
   }, [draft.column, columns, suggestValues]);
   const listId = `values-${draft.id}`;
+  const opRef = useRef<HTMLSelectElement>(null);
   const raw = draft.column === RAW_SQL;
   const needsValue = !raw && !NO_VALUE_OPS.includes(draft.op);
   const set = (patch: Partial<FilterRule>) => {
@@ -323,12 +325,18 @@ function RuleEditor({
     <Floating x={x} y={y} onClose={onClose}>
       <div className="space-y-2" data-testid="rule-editor">
         <div className="flex gap-2">
-          <select className="field h-8 min-w-0 flex-1 text-[12.5px]" value={draft.column} onChange={(e) => set({ column: e.target.value })} aria-label="Column" autoFocus>
-            <Grouped frequent={columnOrder.frequent} restItems={columnOrder.rest} restLabel="All columns" />
-            <option value={RAW_SQL}>Raw SQL…</option>
-          </select>
+          <ColumnPicker
+            columns={columns}
+            value={draft.column}
+            onChange={(column) => set({ column })}
+            frequent={columnOrder.frequent}
+            extraEnd={[{ value: RAW_SQL, label: 'Raw SQL…' }]}
+            onPicked={() => opRef.current?.focus()}
+            autoFocus={!rule}
+            ariaLabel="Column"
+          />
           {!raw && (
-            <select className="field h-8 w-[130px] text-[12.5px]" value={draft.op} onChange={(e) => set({ op: e.target.value as FilterOp })} aria-label="Operator">
+            <select ref={opRef} className="field h-8 w-[130px] text-[12.5px]" value={draft.op} onChange={(e) => set({ op: e.target.value as FilterOp })} aria-label="Operator">
               <Grouped frequent={opOrder.frequent} restItems={opOrder.rest} restLabel="Other" />
             </select>
           )}
@@ -396,14 +404,7 @@ function SortEditor({ x, y, columns, sort, onSave, onClose }: { x: number; y: nu
       <div className="space-y-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">Order by</div>
         <div className="flex gap-2">
-          <select className="field h-8 min-w-0 flex-1 text-[12.5px]" value={column} onChange={(e) => setColumn(e.target.value)} aria-label="Sort column" autoFocus>
-            <option value="">No sorting</option>
-            {columns.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          <ColumnPicker columns={columns} value={column} onChange={setColumn} extraStart={[{ value: '', label: 'No sorting' }]} autoFocus ariaLabel="Sort column" />
           <select className="field h-8 w-[96px] text-[12.5px]" value={descending ? 'desc' : 'asc'} onChange={(e) => setDescending(e.target.value === 'desc')} disabled={!column} aria-label="Direction">
             <option value="asc">ASC ↑</option>
             <option value="desc">DESC ↓</option>
