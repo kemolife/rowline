@@ -1,4 +1,4 @@
-//! `rowline` on the command line: runs read-only queries through the open Rowline app,
+//! `udb` (old name `rowline`) on the command line: runs read-only queries through the open uDB app,
 //! so agents (Claude Code and others) can check data without ever seeing a password.
 //! The same binary is the app; `main` sends it here when the first argument is a CLI command.
 
@@ -12,37 +12,39 @@ use std::path::PathBuf;
 pub const EXIT_ERROR: i32 = 1;
 /// the query is not read-only
 pub const EXIT_BLOCKED: i32 = 2;
-/// Rowline is not running
+/// uDB is not running
 pub const EXIT_NO_APP: i32 = 3;
 
-const HELP: &str = "rowline — read-only database access through the Rowline app
+const HELP: &str = "udb — read-only database access through the uDB app
 
 Usage:
-  rowline connections                      Open connections: name, environment, engine, database
-  rowline tables   [--conn NAME] [--db DB] Tables and views, with estimated row counts
-  rowline describe TABLE [--conn NAME] [--db DB]
+  udb connections                      Open connections: name, environment, engine, database
+  udb tables   [--conn NAME] [--db DB] Tables and views, with estimated row counts
+  udb describe TABLE [--conn NAME] [--db DB]
                                            Columns, indexes and foreign keys of a table
-  rowline query    [--conn NAME] [--db DB] [--limit N] [--format json|table|csv] \"SQL\"
+  udb query    [--conn NAME] [--db DB] [--limit N] [--format json|table|csv] \"SQL\"
                                            Run one read-only statement (SQL can also come on stdin)
 
 Options:
   -c, --conn NAME    Connection by name (any case; a unique part of the name is enough).
                      Not needed when only one connection is open.
-  -d, --db DB        MySQL database. Default: the one selected in Rowline.
+  -d, --db DB        MySQL database. Default: the one selected in uDB.
   -n, --limit N      Most rows to return (default 200, at most 1000).
   -f, --format F     json (default, compact), table or csv.
 
 Rules:
-  - Only connections that are open in the Rowline app can be used. Rowline must be running.
+  - Only connections that are open in the uDB app can be used. uDB must be running.
   - Read-only: one SELECT, SHOW, DESCRIBE, EXPLAIN or WITH … SELECT statement. Writes, several
     statements, INTO OUTFILE, FOR UPDATE, LOAD_FILE, GET_LOCK, SLEEP and similar are refused before
     they reach the database, and the query runs in a read-only transaction with a 30 s time limit.
-  - Text values longer than 2,048 characters are cut. Every query is logged in Rowline's History.
+  - Text values longer than 2,048 characters are cut. Every query is logged in uDB's History.
 
-Exit codes: 0 ok, 1 error, 2 refused (not read-only), 3 Rowline is not running.
+`rowline` is the old name of this command and still works.
+
+Exit codes: 0 ok, 1 error, 2 refused (not read-only), 3 uDB is not running.
 
 Example:
-  rowline query --conn \"prod replica\" \"SELECT id, status FROM orders WHERE id = 42\"
+  udb query --conn \"prod replica\" \"SELECT id, status FROM orders WHERE id = 42\"
 ";
 
 /// True when this is the command line, not the app window. Only a start without arguments (Finder, Dock,
@@ -128,12 +130,12 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
 fn ask(request: &Value) -> Result<Value, (i32, String)> {
     let path = socket_path();
     let mut stream = std::os::unix::net::UnixStream::connect(&path)
-        .map_err(|_| (EXIT_NO_APP, "Rowline is not running. Open the Rowline app and connect to a database.".to_string()))?;
-    let io = |e: std::io::Error| (EXIT_ERROR, format!("Talking to Rowline failed: {e}"));
+        .map_err(|_| (EXIT_NO_APP, "uDB is not running. Open the uDB app and connect to a database.".to_string()))?;
+    let io = |e: std::io::Error| (EXIT_ERROR, format!("Talking to uDB failed: {e}"));
     stream.write_all(format!("{request}\n").as_bytes()).map_err(io)?;
     let mut out = String::new();
     stream.read_to_string(&mut out).map_err(io)?;
-    let answer: Value = serde_json::from_str(&out).map_err(|e| (EXIT_ERROR, format!("Rowline sent a bad answer: {e}")))?;
+    let answer: Value = serde_json::from_str(&out).map_err(|e| (EXIT_ERROR, format!("uDB sent a bad answer: {e}")))?;
     if answer["ok"] == true {
         Ok(answer["data"].clone())
     } else {
@@ -165,7 +167,7 @@ fn run(args: &[String]) -> Result<String, (i32, String)> {
         "connections" => json!({ "cmd": "connections" }),
         "tables" => json!({ "cmd": "tables", "conn": p.conn, "db": p.db }),
         "describe" => {
-            let table = p.arg.clone().ok_or((EXIT_ERROR, "Name the table: rowline describe TABLE".to_string()))?;
+            let table = p.arg.clone().ok_or((EXIT_ERROR, "Name the table: udb describe TABLE".to_string()))?;
             json!({ "cmd": "describe", "conn": p.conn, "db": p.db, "table": table })
         }
         "query" => {
@@ -184,7 +186,7 @@ fn run(args: &[String]) -> Result<String, (i32, String)> {
 fn read_stdin() -> Result<String, String> {
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
-        return Err("Give the SQL as an argument: rowline query \"SELECT …\"".into());
+        return Err("Give the SQL as an argument: udb query \"SELECT …\"".into());
     }
     let mut sql = String::new();
     stdin.lock().read_to_string(&mut sql).map_err(|e| e.to_string())?;
@@ -197,24 +199,30 @@ fn install() -> Result<String, String> {
     Ok(format!("{report}\n"))
 }
 
-/// The link target must be the Rowline app binary; a file (not a link) already there is left alone.
+/// The link target must be the uDB app binary; a file (not a link) already there is left alone.
 pub fn install_link(exe: &std::path::Path) -> Result<String, String> {
     if exe.file_name().and_then(|n| n.to_str()) != Some("rowline") {
-        return Err("Install the command from the Rowline app (this program is not the app).".into());
+        return Err("Install the command from the uDB app (this program is not the app).".into());
     }
     let bin = dirs::home_dir().ok_or("No home folder")?.join(".local/bin");
     install_link_in(exe, &bin)
 }
 
+/// Links `udb`, and `rowline` (the old name, so agents and scripts that use it keep working).
 pub fn install_link_in(exe: &std::path::Path, bin: &std::path::Path) -> Result<String, String> {
     std::fs::create_dir_all(bin).map_err(|e| e.to_string())?;
-    let link = bin.join("rowline");
-    match std::fs::symlink_metadata(&link) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::remove_file(&link).map_err(|e| e.to_string())?,
-        Ok(_) => return Err(format!("{} exists and is not a link; remove it first.", link.display())),
-        Err(_) => {}
+    let link = bin.join("udb");
+    for name in ["udb", "rowline"] {
+        let l = bin.join(name);
+        match std::fs::symlink_metadata(&l) {
+            Ok(m) if m.file_type().is_symlink() => std::fs::remove_file(&l).map_err(|e| e.to_string())?,
+            // a file of someone else's: never touched; for the alias that is fine, for udb it is an error
+            Ok(_) if name == "rowline" => continue,
+            Ok(_) => return Err(format!("{} exists and is not a link; remove it first.", l.display())),
+            Err(_) => {}
+        }
+        std::os::unix::fs::symlink(exe, &l).map_err(|e| e.to_string())?;
     }
-    std::os::unix::fs::symlink(exe, &link).map_err(|e| e.to_string())?;
     let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == bin));
     let mut msg = format!("Installed {} → {}", link.display(), exe.display());
     if !on_path {
@@ -309,16 +317,16 @@ mod tests {
 
     #[test]
     fn knows_when_it_is_the_command_line() {
-        assert!(is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &args(&["query", "SELECT 1"])));
-        assert!(!is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &[]), "Finder starts the app");
+        assert!(is_cli("/Applications/uDB.app/Contents/MacOS/rowline", &args(&["query", "SELECT 1"])));
+        assert!(!is_cli("/Applications/uDB.app/Contents/MacOS/rowline", &[]), "Finder starts the app");
         assert!(!is_cli("/x/target/debug/rowline", &[]), "tauri dev starts the app");
         assert!(is_cli("rowline", &[]), "typed in a shell: help");
         assert!(is_cli("/Users/me/.local/bin/rowline", &[]));
-        assert!(!is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &args(&["-psn_0_123"])));
+        assert!(!is_cli("/Applications/uDB.app/Contents/MacOS/rowline", &args(&["-psn_0_123"])));
         assert!(!is_cli("/x/target/debug/rowline", &args(&["-NSDocumentRevisionsDebugMode", "YES"])));
         // an agent must never open the window by accident: options first, typos, the full path
         for a in [&["--conn", "prod", "query", "SELECT 1"][..], &["sql", "SELECT 1"], &["-c", "x"], &["--format", "table", "connections"]] {
-            assert!(is_cli("/Applications/Rowline.app/Contents/MacOS/rowline", &args(a)), "{a:?}");
+            assert!(is_cli("/Applications/uDB.app/Contents/MacOS/rowline", &args(a)), "{a:?}");
             assert!(is_cli("/Users/me/.local/bin/rowline", &args(a)), "{a:?}");
         }
     }
@@ -368,10 +376,17 @@ mod tests {
         std::fs::write(&exe, "").unwrap();
         let bin = dir.path().join("bin");
         install_link_in(&exe, &bin).unwrap();
-        assert_eq!(std::fs::read_link(bin.join("rowline")).unwrap(), exe);
-        install_link_in(&exe, &bin).unwrap(); // again: the old link is replaced
+        assert_eq!(std::fs::read_link(bin.join("udb")).unwrap(), exe);
+        assert_eq!(std::fs::read_link(bin.join("rowline")).unwrap(), exe, "the old name still works");
+        install_link_in(&exe, &bin).unwrap(); // again: the old links are replaced
+        // a file of someone else's named like the alias is left alone
         std::fs::remove_file(bin.join("rowline")).unwrap();
         std::fs::write(bin.join("rowline"), "mine").unwrap();
+        install_link_in(&exe, &bin).unwrap();
+        assert_eq!(std::fs::read_to_string(bin.join("rowline")).unwrap(), "mine");
+        // but never over a file named udb
+        std::fs::remove_file(bin.join("udb")).unwrap();
+        std::fs::write(bin.join("udb"), "mine").unwrap();
         assert!(install_link_in(&exe, &bin).unwrap_err().contains("not a link"));
         assert!(install_link(&dir.path().join("devserver")).unwrap_err().contains("not the app"));
     }

@@ -185,7 +185,7 @@ export function lintStatement(sql: string, schema: Map<string, Set<string>>): Sq
   return issues;
 }
 
-/** A plain-language hint for a database error, when Rowline can tell what went wrong */
+/** A plain-language hint for a database error, when uDB can tell what went wrong */
 export function explainSqlError(message: string, sql: string): string | null {
   // ERROR 1054: Unknown column 'ds_request.ds_request_id' in 'on clause'
   const m = /Unknown column '([\w$]+)\.([\w$]+)'/i.exec(message);

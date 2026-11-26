@@ -88,7 +88,7 @@ pub struct RunOptions {
     pub system_prompt: String,
 }
 
-/// MCP config for one chat: only Rowline's server, with its secret token.
+/// MCP config for one chat: only uDB's server, with its secret token.
 pub fn mcp_config(url: &str, token: &str) -> String {
     json!({ "mcpServers": { "rowline": { "type": "http", "url": url, "headers": { "Authorization": format!("Bearer {token}") } } } }).to_string()
 }
@@ -146,7 +146,7 @@ pub fn build_args(o: &RunOptions) -> Vec<String> {
 
 pub fn system_prompt(has_project_folder: bool) -> String {
     let mut p = String::from(
-        "You are the assistant inside Rowline, a desktop database client. Answer the user's questions about their databases.\n\
+        "You are the assistant inside uDB, a desktop database client. Answer the user's questions about their databases.\n\
          Use the rowline tools: list_connections first, then list_tables and describe_table, then run_select.\n\
          You can only read data. Never say or imply that you changed data.\n\
          Write SQL for the connection's engine (MySQL or SQLite). Select only the columns you need and use LIMIT.\n\
@@ -213,7 +213,7 @@ pub fn parse_line(line: &str) -> Vec<StreamItem> {
     }
 }
 
-/// A status line for built-in tools; Rowline's own tools show as cards instead.
+/// A status line for built-in tools; uDB's own tools show as cards instead.
 fn activity(block: &Value) -> Option<StreamItem> {
     let name = block["name"].as_str()?;
     let input = &block["input"];

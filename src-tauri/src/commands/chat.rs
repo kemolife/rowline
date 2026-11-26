@@ -134,7 +134,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (state, id) = sqlite_state(dir.path()).await;
         *state.claude.bin_override.lock().unwrap() = Some(fake_claude());
-        // a path saved before the folder check existed: it contains Rowline's settings folder
+        // a path saved before the folder check existed: it contains uDB's settings folder
         let mut config = state.store.connection(&id).unwrap();
         config.project_folder = Some(dir.path().to_str().unwrap().into());
         state.store.save_connection(config).unwrap();

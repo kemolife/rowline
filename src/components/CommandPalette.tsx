@@ -90,7 +90,7 @@ export default function CommandPalette() {
       { id: 'a:system', label: 'Appearance: System', hint: current(s.theme === 'system'), icon: <SunMoon size={14} />, run: () => s.setTheme('system'), group: 'Settings' },
       { id: 'a:blue', label: 'Style: Blue', hint: current(s.colorStyle === 'blue'), icon: <Palette size={14} />, run: () => s.setColorStyle('blue'), group: 'Settings' },
       { id: 'a:warm', label: 'Style: Warm (beige and terracotta)', hint: current(s.colorStyle === 'warm'), icon: <Palette size={14} />, run: () => s.setColorStyle('warm'), group: 'Settings' },
-      { id: 'a:cli', label: 'Install the rowline command (read-only queries for agents)', icon: <Terminal size={14} />, run: installCli, group: 'Settings' },
+      { id: 'a:cli', label: 'Install the udb command (read-only queries for agents)', icon: <Terminal size={14} />, run: installCli, group: 'Settings' },
       ...session.databases
         .filter((d) => d !== session.database && session.config.engine === 'mysql')
         .map((d) => ({ id: `db:${d}`, label: `Switch database: ${d}`, hint: 'Database', icon: <Search size={14} />, run: () => s.selectDatabase(cid, d), group: 'Databases' })),

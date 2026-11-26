@@ -25,7 +25,7 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
       <div className="flex h-full items-center justify-center p-8">
         <div className="w-full max-w-2xl rounded-2xl border border-line bg-surface p-6 shadow-[var(--shadow)]">
           <div className="text-[15px] font-semibold">Something went wrong</div>
-          <p className="mt-1 text-[13px] text-ink-2">The error was saved to the Rowline log. Your saved connections and tabs are safe.</p>
+          <p className="mt-1 text-[13px] text-ink-2">The error was saved to the uDB log. Your saved connections and tabs are safe.</p>
           <pre className="selectable mono mt-4 max-h-72 overflow-auto rounded-xl border border-line bg-bg p-3 text-[11.5px] leading-relaxed whitespace-pre-wrap text-danger">{details}</pre>
           <div className="mt-4 flex gap-2">
             <button className="btn btn-primary" onClick={() => window.location.reload()}>

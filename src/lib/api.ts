@@ -180,7 +180,7 @@ export async function pickOpenPath(label: string, extensions: string[]): Promise
 export async function confirmDialog(message: string, options: { title?: string; danger?: boolean } = {}): Promise<boolean> {
   if (isTauri) {
     const { ask } = await import('@tauri-apps/plugin-dialog');
-    return ask(message, { title: options.title ?? 'Rowline', kind: options.danger ? 'warning' : 'info' });
+    return ask(message, { title: options.title ?? 'uDB', kind: options.danger ? 'warning' : 'info' });
   }
   return window.confirm(message);
 }

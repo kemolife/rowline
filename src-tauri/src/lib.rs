@@ -51,7 +51,7 @@ pub fn run() {
             let store = Store::new(dir.clone(), SecretStore::file(dir.join("secrets.json")))?;
             let state = Arc::new(AppState::new(store));
             tauri::async_runtime::block_on(claude::mcp::start(state.clone()))?;
-            // the `rowline` command; without it the app still works (e.g. a second Rowline is running)
+            // the `rowline` command; without it the app still works (e.g. a second uDB is running)
             if let Err(e) = tauri::async_runtime::block_on(cli::server::start(state.clone(), cli::socket_path())) {
                 eprintln!("rowline command unavailable: {e}");
             }
@@ -60,9 +60,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![call])
         .build(tauri::generate_context!())
-        .expect("error while building Rowline")
+        .expect("error while building uDB")
         .run(|app, event| match event {
-            // Rowline has one window: closing it quits, so nothing keeps running unseen in the background
+            // uDB has one window: closing it quits, so nothing keeps running unseen in the background
             // (an open prod connection, the `rowline` command socket).
             tauri::RunEvent::WindowEvent { event: tauri::WindowEvent::Destroyed, .. } if app.webview_windows().is_empty() => app.exit(0),
             // Quitting must not leave Claude Code processes behind.

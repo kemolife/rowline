@@ -1,5 +1,5 @@
 //! Backup and restore jobs: run in the background, report progress, can be cancelled.
-//! MySQL: a plain .sql file written by Rowline itself (no mysqldump). SQLite: SQLite's own online backup.
+//! MySQL: a plain .sql file written by uDB itself (no mysqldump). SQLite: SQLite's own online backup.
 
 use crate::error::{AppError, AppResult};
 use crate::sqlgen;

@@ -73,7 +73,7 @@ export default function HistoryPane() {
               <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-3">
                 <span className={cx('h-1.5 w-1.5 shrink-0 rounded-full', h.ok ? 'bg-[var(--success)]' : 'bg-[var(--danger)]')} />
                 {h.source === 'cli' && (
-                  <span className="rounded bg-surface-3 px-1 text-[9.5px] font-bold tracking-wide text-ink-2" title="Run by an agent with the rowline command (read-only)">
+                  <span className="rounded bg-surface-3 px-1 text-[9.5px] font-bold tracking-wide text-ink-2" title="Run by an agent with the udb command (read-only)">
                     CLI
                   </span>
                 )}

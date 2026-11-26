@@ -45,7 +45,7 @@ export interface Relation {
   optional: boolean;
   /** no foreign key in the database; matched by name (`ds_person_id` → `ds_person.ds_person_id`) */
   guessed: boolean;
-  /** a virtual foreign key the user saved in Rowline */
+  /** a virtual foreign key the user saved in uDB */
   virtual?: boolean;
 }
 

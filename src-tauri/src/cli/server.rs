@@ -39,12 +39,12 @@ fn failed(e: AppError) -> Value {
     json!({ "ok": false, "error": e.to_string() })
 }
 
-/// Listens on `path`. Refuses to start when another Rowline already answers there;
+/// Listens on `path`. Refuses to start when another uDB already answers there;
 /// a socket file left by a crashed app is replaced.
 pub async fn start(state: Arc<AppState>, path: PathBuf) -> AppResult<()> {
     if path.exists() {
         if UnixStream::connect(&path).await.is_ok() {
-            return Err(AppError::msg(format!("Another Rowline already listens on {}", path.display())));
+            return Err(AppError::msg(format!("Another uDB already listens on {}", path.display())));
         }
         std::fs::remove_file(&path)?;
     }
@@ -131,7 +131,7 @@ async fn connections(state: &AppState) -> AppResult<Value> {
 pub fn pick<'a>(open: &'a [ConnectionConfig], wanted: &str) -> AppResult<&'a ConnectionConfig> {
     let names = || open.iter().map(|c| format!("\"{}\"", c.name)).collect::<Vec<_>>().join(", ");
     if open.is_empty() {
-        return Err(AppError::msg("No connection is open in Rowline. Open one in the app first."));
+        return Err(AppError::msg("No connection is open in uDB. Open one in the app first."));
     }
     let w = wanted.trim().to_lowercase();
     if let Some(c) = open.iter().find(|c| c.name.to_lowercase() == w || c.id == wanted) {
@@ -156,10 +156,10 @@ async fn resolve(state: &AppState, req: &Request) -> AppResult<(ConnectionConfig
         // one open connection: no need to name it
         None if open.len() == 1 => open[0].name.as_str(),
         None if open.is_empty() => "",
-        None => return Err(AppError::msg("Choose a connection with --conn. `rowline connections` lists them.")),
+        None => return Err(AppError::msg("Choose a connection with --conn. `udb connections` lists them.")),
     };
     let c = pick(&open, wanted)?.clone();
-    let session = state.manager.get(&c.id).await.map_err(|_| AppError::msg(format!("Connection \"{}\" is not open in Rowline.", c.name)))?;
+    let session = state.manager.get(&c.id).await.map_err(|_| AppError::msg(format!("Connection \"{}\" is not open in uDB.", c.name)))?;
     Ok((c, session))
 }
 
@@ -170,7 +170,7 @@ async fn tables(state: &AppState, req: &Request) -> AppResult<Value> {
 
 async fn describe(state: &AppState, req: &Request) -> AppResult<Value> {
     let (c, s) = resolve(state, req).await?;
-    let table = req.table.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| AppError::msg("Name the table: rowline describe <table>"))?;
+    let table = req.table.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| AppError::msg("Name the table: udb describe <table>"))?;
     Ok(serde_json::to_value(s.structure(database(state, &c, req.db.as_deref()).as_deref(), table).await?)?)
 }
 
@@ -200,7 +200,7 @@ async fn query(state: &AppState, req: &Request) -> Value {
     };
     if access != ClaudeAccess::Data {
         let e = AppError::msg(format!(
-            "Connection \"{}\" allows schema only for AI (Claude access: Schema). Use `rowline tables` / `describe`, or set Claude access to Data in the connection settings.",
+            "Connection \"{}\" allows schema only for AI (Claude access: Schema). Use `udb tables` / `describe`, or set Claude access to Data in the connection settings.",
             c.name
         ));
         log(false, Some(format!("Blocked: {e}")), None);
