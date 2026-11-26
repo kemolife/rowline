@@ -1,5 +1,5 @@
 import { installCli } from '../lib/cliInstall';
-import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Palette, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
 import { tlsWarning } from '../lib/tls';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -129,8 +129,6 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
     }
   };
 
-  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : SunMoon;
-  const nextTheme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system';
 
   return (
     <div className="flex h-full flex-col">
@@ -227,18 +225,49 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
         <button className="btn btn-ghost h-7" onClick={installCli} title="Put the rowline command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line
         </button>
-        <button
-          className="btn btn-ghost h-7"
-          onClick={() => setColorStyle(colorStyle === 'blue' ? 'warm' : 'blue')}
-          title={`Style: ${colorStyle === 'blue' ? 'Blue' : 'Warm'}. Click to switch.`}
-          data-testid="style-toggle"
-        >
-          <Palette size={14} /> {colorStyle === 'blue' ? 'Blue' : 'Warm'}
-        </button>
-        <button className="btn btn-ghost h-7" onClick={() => setTheme(nextTheme)} title={`Theme: ${theme}`}>
-          <ThemeIcon size={14} /> {theme === 'system' ? 'System' : theme === 'light' ? 'Light' : 'Dark'}
-        </button>
+        {/* every choice is visible and the current one is highlighted: a single button showed the current mode and read like "switch to" */}
+        <Segmented
+          label="Style"
+          value={colorStyle}
+          onChange={setColorStyle}
+          options={[
+            { value: 'blue', label: 'Blue', icon: <span className="h-2.5 w-2.5 rounded-full bg-[#3a6db5]" /> },
+            { value: 'warm', label: 'Warm', icon: <span className="h-2.5 w-2.5 rounded-full bg-[#c96442]" /> },
+          ]}
+          testId="style-switch"
+        />
+        <Segmented
+          label="Appearance"
+          value={theme}
+          onChange={setTheme}
+          options={[
+            { value: 'light', label: 'Light', icon: <Sun size={13} /> },
+            { value: 'dark', label: 'Dark', icon: <Moon size={13} /> },
+            { value: 'system', label: 'System', icon: <SunMoon size={13} /> },
+          ]}
+          testId="theme-switch"
+        />
       </div>
+    </div>
+  );
+}
+
+/** A small row of choices with the current one highlighted (style, appearance). */
+function Segmented<T extends string>({ label, value, onChange, options, testId }: { label: string; value: T; onChange: (v: T) => void; options: { value: T; label: string; icon: React.ReactNode }[]; testId: string }) {
+  return (
+    <div className="flex items-center rounded-lg bg-surface-2 p-0.5" role="radiogroup" aria-label={label} data-testid={testId}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          role="radio"
+          aria-checked={o.value === value}
+          className={cx('flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px]', o.value === value ? 'bg-surface font-medium text-ink shadow-sm' : 'text-ink-3 hover:text-ink')}
+          onClick={() => onChange(o.value)}
+          title={`${label}: ${o.label}`}
+        >
+          {o.icon} {o.label}
+        </button>
+      ))}
     </div>
   );
 }
