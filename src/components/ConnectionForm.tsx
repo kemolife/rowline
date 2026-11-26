@@ -357,7 +357,11 @@ export default function ConnectionForm() {
             </label>
           )}
 
-          {result && (
+        </div>
+
+        {/* the Test result sits in the fixed footer: seen also when the form is scrolled to the top */}
+        {result && (
+          <div className="max-h-28 shrink-0 overflow-y-auto border-t border-line px-5 pt-3" data-testid="test-result">
             <div
               className={cx(
                 'selectable flex items-start gap-2 rounded-lg px-3 py-2 text-[12px]',
@@ -367,10 +371,9 @@ export default function ConnectionForm() {
               {result.ok ? <CheckCircle2 size={15} className="mt-px shrink-0" /> : <XCircle size={15} className="mt-px shrink-0" />}
               <span className="break-words">{result.text}</span>
             </div>
-          )}
-        </div>
-
-        <div className="flex shrink-0 items-center justify-between border-t border-line px-5 py-3">
+          </div>
+        )}
+        <div className={cx('flex shrink-0 items-center justify-between px-5 py-3', !result && 'border-t border-line')}>
           <button type="button" className="btn" onClick={test} disabled={!!busy}>
             {busy === 'test' && <Loader2 size={14} className="animate-spin" />} Test
           </button>
