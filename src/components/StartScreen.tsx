@@ -1,8 +1,9 @@
 import { installCli } from '../lib/cliInstall';
-import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, Moon, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Sun, SunMoon, Trash2, Terminal } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Trash2, Terminal } from 'lucide-react';
 import { tlsWarning } from '../lib/tls';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import AppearanceSwitches from './Appearance';
 import { useDismiss } from '../lib/useDismiss';
 import { confirmDialog } from '../lib/api';
 import { ENV_ORDER, groupByProject, projectBadge, projectColor, relativeTime, type ProjectInfo } from '../lib/projects';
@@ -65,10 +66,6 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
   const connect = useApp((s) => s.connect);
   const setEditing = useApp((s) => s.setEditing);
   const toast = useApp((s) => s.toast);
-  const theme = useApp((s) => s.theme);
-  const setTheme = useApp((s) => s.setTheme);
-  const colorStyle = useApp((s) => s.colorStyle);
-  const setColorStyle = useApp((s) => s.setColorStyle);
   const [query, setQuery] = useState('');
   const projects = useProjects();
 
@@ -225,49 +222,8 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
         <button className="btn btn-ghost h-7" onClick={installCli} title="Put the rowline command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line
         </button>
-        {/* every choice is visible and the current one is highlighted: a single button showed the current mode and read like "switch to" */}
-        <Segmented
-          label="Style"
-          value={colorStyle}
-          onChange={setColorStyle}
-          options={[
-            { value: 'blue', label: 'Blue', icon: <span className="h-2.5 w-2.5 rounded-full bg-[#3a6db5]" /> },
-            { value: 'warm', label: 'Warm', icon: <span className="h-2.5 w-2.5 rounded-full bg-[#c96442]" /> },
-          ]}
-          testId="style-switch"
-        />
-        <Segmented
-          label="Appearance"
-          value={theme}
-          onChange={setTheme}
-          options={[
-            { value: 'light', label: 'Light', icon: <Sun size={13} /> },
-            { value: 'dark', label: 'Dark', icon: <Moon size={13} /> },
-            { value: 'system', label: 'System', icon: <SunMoon size={13} /> },
-          ]}
-          testId="theme-switch"
-        />
+        <AppearanceSwitches />
       </div>
-    </div>
-  );
-}
-
-/** A small row of choices with the current one highlighted (style, appearance). */
-function Segmented<T extends string>({ label, value, onChange, options, testId }: { label: string; value: T; onChange: (v: T) => void; options: { value: T; label: string; icon: React.ReactNode }[]; testId: string }) {
-  return (
-    <div className="flex items-center rounded-lg bg-surface-2 p-0.5" role="radiogroup" aria-label={label} data-testid={testId}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          role="radio"
-          aria-checked={o.value === value}
-          className={cx('flex h-6 items-center gap-1.5 rounded-md px-2 text-[12px]', o.value === value ? 'bg-surface font-medium text-ink shadow-sm' : 'text-ink-3 hover:text-ink')}
-          onClick={() => onChange(o.value)}
-          title={`${label}: ${o.label}`}
-        >
-          {o.icon} {o.label}
-        </button>
-      ))}
     </div>
   );
 }
