@@ -1,7 +1,7 @@
 [package]
 name = "rowline"
 version = "0.1.0"
-description = "Rowline — a fast, modern MySQL and SQLite client"
+description = "uDB — a fast, modern MySQL and SQLite client"
 authors = ["Vitalii Antoniuk"]
 license = ""
 edition = "2024"

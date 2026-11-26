@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 
-/// Where Claude Code reaches Rowline's MCP server
+/// Where Claude Code reaches uDB's MCP server
 #[derive(Debug, Clone)]
 pub struct McpEndpoint {
     pub port: u16,
@@ -28,7 +28,7 @@ impl McpEndpoint {
     }
 }
 
-/// A connection a chat may use, with the database selected in Rowline (MySQL)
+/// A connection a chat may use, with the database selected in uDB (MySQL)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatConnection {

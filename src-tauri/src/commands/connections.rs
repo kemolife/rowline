@@ -94,7 +94,7 @@ fn save_connection(state: &AppState, input: ConnectionInput) -> AppResult<Connec
 }
 
 /// The canonical project folder path. Refuses folders that would show Claude too much:
-/// the disk root, the home folder or any folder above it, Rowline's config folder (passwords live there),
+/// the disk root, the home folder or any folder above it, uDB's config folder (passwords live there),
 /// anything inside it, and any folder above it (e.g. ~/Library).
 /// The runner checks again before every start, so older saved paths are covered too.
 pub(crate) fn project_folder(config_dir: &std::path::Path, folder: &str) -> AppResult<String> {
@@ -112,7 +112,7 @@ pub(crate) fn project_folder(config_dir: &std::path::Path, folder: &str) -> AppR
     }
     let config_dir = std::fs::canonicalize(config_dir).unwrap_or_else(|_| config_dir.to_path_buf());
     if canonical.starts_with(&config_dir) || config_dir.starts_with(&canonical) {
-        return Err(AppError::msg("The project folder can't contain or be inside Rowline's settings folder. Choose your app's folder."));
+        return Err(AppError::msg("The project folder can't contain or be inside uDB's settings folder. Choose your app's folder."));
     }
     canonical.to_str().map(str::to_string).ok_or_else(|| AppError::msg(format!("Project folder path is not valid text: {folder}")))
 }

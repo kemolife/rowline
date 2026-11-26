@@ -46,6 +46,6 @@ async fn main() {
         .with_state(state);
     let port: u16 = std::env::var("ROWLINE_DEVSERVER_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(1421);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
-    println!("Rowline dev bridge on http://127.0.0.1:{port} (config: {})", dir.display());
+    println!("uDB dev bridge on http://127.0.0.1:{port} (config: {})", dir.display());
     axum::serve(listener, app).await.expect("serve");
 }

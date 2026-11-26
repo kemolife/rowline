@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Rowline",
+  "productName": "uDB",
   "version": "0.1.0",
   "identifier": "app.rowline.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Rowline",
+        "title": "uDB",
         "width": 1400,
         "height": 880,
         "minWidth": 960,

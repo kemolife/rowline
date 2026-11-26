@@ -1,4 +1,6 @@
-# Rowline
+# uDB
+
+*Use your DB.* (Formerly Rowline.)
 
 A fast, native-feeling desktop client for **MySQL** and **SQLite**, built for macOS first.
 Browse and edit tables, write SQL, back up a database, and ask Claude questions about your data —
@@ -16,27 +18,27 @@ Requirements: macOS, Rust (stable, 1.90+), Node 22+.
 git clone https://github.com/kemolife/rowline.git
 cd rowline
 npm install
-npm run tauri build -- --bundles app   # → src-tauri/target/release/bundle/macos/Rowline.app
-cp -R src-tauri/target/release/bundle/macos/Rowline.app /Applications/
+npm run tauri build -- --bundles app   # → src-tauri/target/release/bundle/macos/uDB.app
+cp -R src-tauri/target/release/bundle/macos/uDB.app /Applications/
 ```
 
 The build is not code-signed. On first launch, use right-click → Open if macOS blocks it.
 
 ### Update
 
-Quit Rowline (⌘Q), then in the `rowline` folder:
+Quit uDB (⌘Q), then in the `rowline` folder:
 
 ```bash
 ./scripts/update.sh
 ```
 
-It pulls the latest code, builds the app and replaces `/Applications/Rowline.app`. Your connections,
+It pulls the latest code, builds the app and replaces `/Applications/uDB.app`. Your connections,
 passwords, saved queries and history stay: they live in `~/Library/Application Support/app.rowline.desktop/`
 (see [Where your data lives](#where-your-data-lives)), not inside the app.
 
 - `./scripts/update.sh --no-pull` builds and installs the code you have checked out now (for example a branch).
-- It stops if Rowline is still running or if you have uncommitted changes.
-- If the Dock still shows the old icon, remove Rowline from the Dock and add it again.
+- It stops if uDB is still running or if you have uncommitted changes.
+- If the Dock still shows the old icon, remove uDB from the Dock and add it again.
 
 <details>
 <summary>The same steps by hand</summary>
@@ -45,9 +47,9 @@ passwords, saved queries and history stay: they live in `~/Library/Application S
 git pull
 npm install
 npm run tauri build -- --bundles app
-rm -rf /Applications/Rowline.app
-ditto src-tauri/target/release/bundle/macos/Rowline.app /Applications/Rowline.app
-codesign --force --deep --sign - /Applications/Rowline.app
+rm -rf /Applications/uDB.app
+ditto src-tauri/target/release/bundle/macos/uDB.app /Applications/uDB.app
+codesign --force --deep --sign - /Applications/uDB.app
 ```
 
 </details>
@@ -65,7 +67,7 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 - **Projects**: give a connection a project (connection form → *Project*). The connection list is grouped by
   project; in the rail, a project's connections sit together under a colored badge, with a stripe in the
   project color; the header shows the project too. Colors come from the name, nothing to set up.
-  Without a project, Rowline guesses one: connections whose names start with the same word (`2solar dev`,
+  Without a project, uDB guesses one: connections whose names start with the same word (`2solar dev`,
   `2Solar-prod`) or that open the same database are grouped (at least two). Guessed projects have a dashed badge;
   *Use* in the connection form keeps the guess.
 - The connection list shows one card per project (fold it up with the header): connections sorted Production first,
@@ -128,7 +130,7 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 
 From the `⋯` menu in the header, with progress and Cancel.
 
-- **MySQL:** a plain `.sql` file written by Rowline itself — no `mysqldump` needed. Structure, data, views,
+- **MySQL:** a plain `.sql` file written by uDB itself — no `mysqldump` needed. Structure, data, views,
   triggers and routines from one consistent snapshot. Restore runs a `.sql` file.
 - **SQLite:** a safe copy made with SQLite's own online backup; restore copies a backup back.
 - A cancelled or failed backup leaves no half-written file.
@@ -158,24 +160,24 @@ Sidebar → **Diagram** → *Open relation diagram*.
 - **Schema changes**: *Mark as seen* saves a snapshot (the last 5 are kept). Later, new tables and columns show
   in green, dropped ones in red, changed ones in amber — on the diagram and in the sidebar.
 
-### Command line for agents (`rowline`)
+### Command line for agents (`udb`)
 
-Let Claude Code (or any agent, script or terminal) check data through Rowline, read-only, without ever
+Let Claude Code (or any agent, script or terminal) check data through uDB, read-only, without ever
 seeing a password. Typical use: the agent reads the code for a bug ticket, writes a SELECT, runs it itself.
 
-Install once: **Command line** at the bottom of the start screen (or *Install the rowline command* in `⌘K`).
-It links `~/.local/bin/rowline` to the app; add `~/.local/bin` to your `PATH` if it is not there.
+Install once: **Command line** at the bottom of the start screen (or *Install the udb command* in `⌘K`).
+It links `~/.local/bin/udb` to the app (and `rowline`, the old name, so existing scripts keep working); add `~/.local/bin` to your `PATH` if it is not there.
 
 ```bash
-rowline connections                                   # open connections: name, environment, engine, database
-rowline tables --conn "prod core"                     # tables with row estimates
-rowline describe orders --conn "prod core"            # columns, indexes, foreign keys
-rowline query --conn "prod core" "SELECT id, status FROM orders WHERE id = 42"
-rowline query -f table -n 20 "SELECT …"               # json (default), table or csv; --db to pick a database
+udb connections                                   # open connections: name, environment, engine, database
+udb tables --conn "prod core"                     # tables with row estimates
+udb describe orders --conn "prod core"            # columns, indexes, foreign keys
+udb query --conn "prod core" "SELECT id, status FROM orders WHERE id = 42"
+udb query -f table -n 20 "SELECT …"               # json (default), table or csv; --db to pick a database
 ```
 
 - Talks to the running app over a Unix socket that only your user can open
-  (`~/Library/Application Support/app.rowline.desktop/rowline.sock`). Rowline must be running.
+  (`~/Library/Application Support/app.rowline.desktop/rowline.sock`). uDB must be running.
 - Only connections that are **open in the app** can be used; close one and the agent loses it.
   A unique part of the name is enough, and `--conn` is optional with one open connection.
 - The database is the one selected in the app, unless `--db` says otherwise.
@@ -184,17 +186,17 @@ rowline query -f table -n 20 "SELECT …"               # json (default), table 
   stay on the pooled connection), `SLEEP` and `BENCHMARK` are refused before they reach the database (exit code 2), and the query runs in a read-only transaction with a 30 s limit.
 - At most 200 rows by default (`--limit`, up to 1,000); long text values are cut to 2 KB.
 - Every query, blocked ones too, shows up in the connection's **History** with a *CLI* mark.
-- Exit codes: 0 ok, 1 error, 2 refused, 3 Rowline is not running. `rowline help` explains it all.
+- Exit codes: 0 ok, 1 error, 2 refused, 3 uDB is not running. `udb help` explains it all.
 
 To tell Claude Code about it, add to your project's `CLAUDE.md`:
 
 ```
-To check data in the database, use the `rowline` command (read-only; run `rowline help` first).
+To check data in the database, use the `udb` command (read-only; run `udb help` first).
 ```
 
 ### Claude panel (`⌘L`)
 
-Ask questions about your data in plain language. Rowline uses the Claude Code you already have installed
+Ask questions about your data in plain language. uDB uses the Claude Code you already have installed
 and its login — no API key.
 
 - Claude can only read. Every query runs in a read-only transaction (MySQL) or on a read-only
@@ -239,7 +241,7 @@ Everything stays on your Mac, in `~/Library/Application Support/app.rowline.desk
 | `history.json` | Query history |
 | `virtual_keys.json` | Virtual foreign keys |
 | `schema-snapshots/` | Schema snapshots for the relation diagram's change view |
-| `rowline.sock` | Socket for the `rowline` command while the app runs (`0600`) |
+| `rowline.sock` | Socket for the `udb` command while the app runs (`0600`) |
 
 ## Develop
 

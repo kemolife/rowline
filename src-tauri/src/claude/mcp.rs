@@ -1,4 +1,4 @@
-//! Rowline's MCP server: read-only database tools for the Claude panel.
+//! uDB's MCP server: read-only database tools for the Claude panel.
 //! Minimal MCP (JSON-RPC 2.0) over streamable HTTP: every POST gets one JSON response, no server-sent events.
 
 use super::events::ChatEvent;
@@ -92,7 +92,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "rowline", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": "Read-only access to the user's open database connections in Rowline. Call list_connections first."
+        "instructions": "Read-only access to the user's open database connections in uDB. Call list_connections first."
     })
 }
 
@@ -109,7 +109,7 @@ fn tool_list(state: &AppState, chat_id: &str) -> AppResult<Value> {
     let chat = state.claude.chat(chat_id)?;
     let any_data = visible(state, &chat).iter().any(|c| c.claude_access() == ClaudeAccess::Data);
     let conn = || json!({ "type": "string", "description": "Connection id from list_connections" });
-    let db = || json!({ "type": "string", "description": "MySQL database (schema). Default: the database selected in Rowline" });
+    let db = || json!({ "type": "string", "description": "MySQL database (schema). Default: the database selected in uDB" });
     let mut tools = vec![
         json!({ "name": "list_connections", "description": "Database connections you may use in this chat: id, name, engine (mysql or sqlite), environment, selected database and access level.", "inputSchema": { "type": "object", "properties": {} } }),
         json!({ "name": "list_tables", "description": "Tables and views of a connection, with estimated row counts.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db() }, "required": ["connection"] } }),
@@ -234,11 +234,11 @@ async fn resolve(state: &AppState, chat: &ChatConfig, a: &ToolArgs) -> AppResult
     if config.claude_access() == ClaudeAccess::Off {
         return Err(not_available());
     }
-    let session = state.manager.get(id).await.map_err(|_| AppError::msg(format!("Connection \"{}\" is not open in Rowline.", config.name)))?;
+    let session = state.manager.get(id).await.map_err(|_| AppError::msg(format!("Connection \"{}\" is not open in uDB.", config.name)))?;
     Ok((config, session))
 }
 
-/// MySQL: the argument, else the database selected in Rowline, else the saved default. SQLite: none.
+/// MySQL: the argument, else the database selected in uDB, else the saved default. SQLite: none.
 fn database(chat: &ChatConfig, c: &ConnectionConfig, a: &ToolArgs) -> Option<String> {
     match c.engine {
         Engine::Mysql => a.database.clone().or_else(|| chat.database_for(&c.id)).or_else(|| c.database.clone()),

@@ -1,4 +1,4 @@
-//! MySQL backup to a .sql file and restore from one, done by Rowline itself (no mysqldump).
+//! MySQL backup to a .sql file and restore from one, done by uDB itself (no mysqldump).
 //! The file is plain SQL that the `mysql` client or any other tool can load too.
 
 use super::MysqlSession;
@@ -133,8 +133,8 @@ async fn write_backup(c: &mut Conn, database: &str, path: &str, only_tables: Opt
 
     let mut file = AtomicFile::create(path)?;
     let w = &mut file.writer;
-    writeln!(w, "-- Rowline backup of `{database}`, {}", chrono::Utc::now().to_rfc3339())?;
-    writeln!(w, "-- Restore with Rowline (Restore database…) or: mysql -u <user> -p {database} < this-file.sql\n")?;
+    writeln!(w, "-- uDB backup of `{database}`, {}", chrono::Utc::now().to_rfc3339())?;
+    writeln!(w, "-- Restore with uDB (Restore database…) or: mysql -u <user> -p {database} < this-file.sql\n")?;
     writeln!(w, "SET NAMES utf8mb4;")?;
     writeln!(w, "SET @OLD_FOREIGN_KEY_CHECKS = @@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS = 0;")?;
     writeln!(w, "SET @OLD_UNIQUE_CHECKS = @@UNIQUE_CHECKS, UNIQUE_CHECKS = 0;")?;

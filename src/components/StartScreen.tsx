@@ -143,7 +143,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
               <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-text">
                 <Database size={20} />
               </div>
-              <h1 className="text-[26px] font-semibold tracking-tight text-ink">Rowline</h1>
+              <h1 className="text-[26px] font-semibold tracking-tight text-ink">uDB</h1>
               <p className="mt-1 text-[13.5px] text-ink-2">Open a connection to start browsing and querying.</p>
             </div>
             <div className="flex gap-2">
@@ -219,7 +219,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
       <div className="flex h-10 shrink-0 items-center justify-between border-t border-line px-4 text-[11.5px] text-ink-3">
         <span>MySQL · SQLite</span>
         <div className="flex-1" />
-        <button className="btn btn-ghost h-7" onClick={installCli} title="Put the rowline command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
+        <button className="btn btn-ghost h-7" onClick={installCli} title="Put the udb command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line
         </button>
         <AppearanceSwitches />

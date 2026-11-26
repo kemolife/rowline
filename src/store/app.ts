@@ -574,7 +574,7 @@ export const useApp = create<AppState>((set, get) => {
   };
 });
 
-/** Settings that change how Rowline connects; changing any of them needs a reconnect. */
+/** Settings that change how uDB connects; changing any of them needs a reconnect. */
 export function needsReconnect(a: ConnectionConfig, b: ConnectionConfig): boolean {
   const keys: (keyof ConnectionConfig)[] = ['engine', 'host', 'port', 'user', 'tls', 'filePath'];
   return keys.some((k) => (a[k] ?? null) !== (b[k] ?? null));
