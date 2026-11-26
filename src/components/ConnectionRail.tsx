@@ -64,8 +64,11 @@ export default function ConnectionRail() {
             {startsGroup && i > 0 && <div className="h-px w-7 shrink-0 bg-line" />}
             {startsGroup && info && <ProjectBadge project={info} className="no-drag h-4 min-w-6 px-1 text-[8.5px]" />}
             <button
-              className={cx('group no-drag relative flex h-9 w-9 items-center justify-center rounded-[10px] text-[12px] font-semibold transition-shadow', active && 'shadow-[0_0_0_2px_var(--accent)]')}
-              style={{ background: `color-mix(in srgb, ${color} ${active ? 22 : 14}%, transparent)`, color }}
+              // neutral tile; the environment is a thin line at the bottom (a colored tile clashed with the blue ring)
+              className={cx(
+                'group no-drag relative flex h-9 w-9 items-center justify-center overflow-visible rounded-[10px] text-[12px] font-semibold transition-shadow',
+                active ? 'bg-surface-3 text-ink shadow-[0_0_0_2px_var(--accent)]' : 'bg-surface-2 text-ink-2 hover:text-ink',
+              )}
               onClick={() => useApp.getState().switchTo(id)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -76,6 +79,7 @@ export default function ConnectionRail() {
               data-testid="rail-item"
             >
               {initials(c.name)}
+              <span className="absolute bottom-[3px] left-2 right-2 h-[3px] rounded-full" style={{ background: color }} title={ENV_LABEL[c.environment]} />
               {/* project stripe on the left */}
               {project && <span className={cx('absolute -left-[7px] top-1.5 bottom-1.5 w-[3px] rounded-full', info?.auto && 'opacity-50')} style={{ background: projectColor(project) }} />}
               {/* green dot: connected (every connection in the rail is open) */}
