@@ -1,5 +1,5 @@
 import { CheckCircle2, FolderOpen, Loader2, X, XCircle } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, pickFolder, pickSqliteFile } from '../lib/api';
 import { effectiveProjects, projectColor } from '../lib/projects';
 import { effectiveClaudeAccess, type ClaudeAccess, type ConnectionInput, type Engine, type Environment, type TlsMode } from '../lib/types';
@@ -66,6 +66,23 @@ export default function ConnectionForm() {
     projectFolder: effectiveClaudeAccess(form) === 'off' ? null : form.projectFolder?.trim() || null,
     password: form.engine === 'mysql' && passwordTouched ? (form.password ?? '') : undefined,
   });
+
+  // databases on the server, loaded when the Database field gets focus (once per host / user / password)
+  const [dbs, setDbs] = useState<{ key: string; names: string[] | null; error: string | null; loading: boolean } | null>(null);
+  const dbKey = JSON.stringify([form.host, form.port, form.user, passwordTouched ? form.password : '(saved)', tls, form.id]);
+  const dbReq = useRef(0);
+  const loadDatabases = async () => {
+    if (form.engine !== 'mysql' || (dbs?.key === dbKey && !dbs.error)) return;
+    const req = ++dbReq.current;
+    setDbs({ key: dbKey, names: null, error: null, loading: true });
+    try {
+      const names = await api.listDatabasesFor(payload());
+      if (req === dbReq.current) setDbs({ key: dbKey, names, error: null, loading: false });
+    } catch (e) {
+      if (req === dbReq.current) setDbs({ key: dbKey, names: null, error: (e as Error).message, loading: false });
+    }
+  };
+  const dbList = dbs?.key === dbKey ? dbs : null;
 
   const test = async () => {
     setBusy('test');
@@ -241,7 +258,31 @@ export default function ConnectionForm() {
                 <span className="label">
                   Database <span className="font-normal text-ink-3">(optional)</span>
                 </span>
-                <input className="field field-mono" value={form.database ?? ''} onChange={(e) => set({ database: e.target.value })} />
+                <input
+                  className="field field-mono"
+                  value={form.database ?? ''}
+                  onChange={(e) => set({ database: e.target.value })}
+                  onFocus={loadDatabases}
+                  list={dbList?.names?.length ? 'connection-databases' : undefined}
+                  placeholder={dbList?.names?.length ? 'Pick from the list or type' : ''}
+                  data-testid="database-field"
+                />
+                {dbList?.names && (
+                  <datalist id="connection-databases">
+                    {dbList.names.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                )}
+                <span className="block text-[11.5px] text-ink-3" data-testid="database-hint">
+                  {dbList?.loading
+                    ? 'Loading databases…'
+                    : dbList?.error
+                      ? `Could not load the list (${dbList.error}). You can still type the name.`
+                      : dbList?.names
+                        ? `${dbList.names.length} ${dbList.names.length === 1 ? 'database' : 'databases'} on the server: pick one or type.`
+                        : 'Click to load the databases from the server.'}
+                </span>
               </label>
               <div className="space-y-1.5">
                 <span className="label">TLS</span>

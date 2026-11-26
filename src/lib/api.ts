@@ -50,6 +50,8 @@ export const api = {
   saveConnection: (input: ConnectionInput) => call<ConnectionConfig>('save_connection', { ...input }),
   deleteConnection: (id: string) => call<boolean>('delete_connection', { id }),
   testConnection: (input: ConnectionInput) => call<ServerInfo>('test_connection', { ...input }),
+  /** databases on the server of a connection form (system schemas left out); the saved password is used when none is typed */
+  listDatabasesFor: (input: ConnectionInput) => call<string[]>('list_databases_for', { ...input }),
   connect: (id: string) => call<ServerInfo>('connect', { id }),
   disconnect: (id: string) => call<boolean>('disconnect', { id }),
   /** the database the app shows; the `rowline` command uses it by default */

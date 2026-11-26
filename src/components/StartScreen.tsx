@@ -273,13 +273,19 @@ function ProjectCard({
   for (const c of items) counts.set(c.environment, (counts.get(c.environment) ?? 0) + 1);
   const color = name ? projectColor(name) : null;
 
-  const rename = async () => {
+  // rename in place: window.prompt shows nothing in the macOS app, so "Rename…" did nothing
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const rename = () => {
     setMenu(null);
-    const next = window.prompt('Project name', name ?? '');
-    if (next === null || !next.trim() || next.trim() === name) return;
+    setRenaming(name ?? '');
+  };
+  const finishRename = async (save: boolean) => {
+    const next = renaming?.trim();
+    setRenaming(null);
+    if (!save || !next || next === name) return;
     await useApp.getState().setProject(
       items.map((c) => c.id),
-      next.trim(),
+      next,
     );
   };
 
@@ -312,7 +318,28 @@ function ProjectCard({
         ) : (
           <span className="h-[26px] w-[26px] shrink-0 rounded-md border-[1.5px] border-dashed border-line-strong" />
         )}
-        <span className="truncate text-[14px] font-semibold text-ink">{name ?? 'No project'}</span>
+        {renaming !== null ? (
+          <input
+            className="field h-7 w-56 text-[14px] font-semibold"
+            value={renaming}
+            autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setRenaming(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') finishRename(true);
+              else if (e.key === 'Escape') finishRename(false);
+            }}
+            onBlur={() => finishRename(true)}
+            aria-label="Project name"
+            data-testid="project-rename"
+          />
+        ) : (
+          <span className="truncate text-[14px] font-semibold text-ink" onDoubleClick={(e) => name && (e.stopPropagation(), rename())} title={name ? 'Double-click to rename' : undefined}>
+            {name ?? 'No project'}
+          </span>
+        )}
         <span className="shrink-0 text-[12.5px] text-ink-3">
           {items.length} connection{items.length === 1 ? '' : 's'}
         </span>
