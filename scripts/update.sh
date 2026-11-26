@@ -47,4 +47,9 @@ codesign --verify "$APP"
 rm -rf "$BUNDLE"
 "$LSREGISTER" -f "$APP"
 
+# the command line: links made before point at the old app path, so make them again
+if [[ -L "$HOME/.local/bin/rowline" || -L "$HOME/.local/bin/udb" ]]; then
+  "$APP/Contents/MacOS/rowline" install
+fi
+
 echo "uDB updated: $(git log -1 --format='%h %s')"
