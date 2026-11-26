@@ -22,6 +22,36 @@ cp -R src-tauri/target/release/bundle/macos/Rowline.app /Applications/
 
 The build is not code-signed. On first launch, use right-click → Open if macOS blocks it.
 
+### Update
+
+Quit Rowline (⌘Q), then in the `rowline` folder:
+
+```bash
+./scripts/update.sh
+```
+
+It pulls the latest code, builds the app and replaces `/Applications/Rowline.app`. Your connections,
+passwords, saved queries and history stay: they live in `~/Library/Application Support/app.rowline.desktop/`
+(see [Where your data lives](#where-your-data-lives)), not inside the app.
+
+- `./scripts/update.sh --no-pull` builds and installs the code you have checked out now (for example a branch).
+- It stops if Rowline is still running or if you have uncommitted changes.
+- If the Dock still shows the old icon, remove Rowline from the Dock and add it again.
+
+<details>
+<summary>The same steps by hand</summary>
+
+```bash
+git pull
+npm install
+npm run tauri build -- --bundles app
+rm -rf /Applications/Rowline.app
+ditto src-tauri/target/release/bundle/macos/Rowline.app /Applications/Rowline.app
+codesign --force --deep --sign - /Applications/Rowline.app
+```
+
+</details>
+
 The Claude panel needs [Claude Code](https://claude.com/claude-code) installed and logged in. Everything else works without it.
 
 ## Features
@@ -261,4 +291,4 @@ cd dev/docker && docker compose up -d   # MySQL 8.4 on 127.0.0.1:13306 with a sm
 
 ## Build
 
-See [Install](#install) for the release build.
+See [Install](#install) for the release build and [Update](#update) to replace an installed app.
