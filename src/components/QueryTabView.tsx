@@ -386,7 +386,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         />
       </div>
 
-      <div className="flex h-10 shrink-0 cursor-row-resize items-center gap-1.5 border-y border-line bg-bg px-2" onMouseDown={(e) => e.target === e.currentTarget && startResize(e)}>
+      <div className="@container flex h-10 shrink-0 cursor-row-resize items-center gap-1.5 border-y border-line bg-bg px-2" onMouseDown={(e) => e.target === e.currentTarget && startResize(e)}>
         {running ? (
           <button className="btn h-7" onClick={cancel} data-testid="cancel-query">
             <Square size={12} className="fill-current" /> Cancel <span className="text-ink-3">{MOD}.</span>
@@ -438,7 +438,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         )}
         {!running && (
           <button className="btn h-7" onClick={() => run('all')} title={`Run all statements, each with its own result (⇧${MOD}↵)`}>
-            <PlayCircle size={14} /> Run all
+            <PlayCircle size={14} /> <span className="@max-[800px]:hidden">Run all</span>
           </button>
         )}
         <select
@@ -456,7 +456,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           ))}
         </select>
         <button className="btn btn-ghost h-7" onClick={beautify} title={`Format the SQL (${MOD}I)`} data-testid="beautify">
-          <WandSparkles size={14} /> Beautify
+          <WandSparkles size={14} /> <span className="@max-[900px]:hidden">Beautify</span>
         </button>
         <button
           className="btn btn-ghost h-7"
@@ -464,11 +464,11 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           title={tab.savedQueryId ? `Update the saved query (${MOD}S) — ${MOD}⇧S saves a copy` : `Save to Queries (${MOD}S)`}
           data-testid="save-query"
         >
-          <Save size={14} /> {tab.savedQueryId ? 'Save' : 'Save…'}
+          <Save size={14} /> <span className="@max-[900px]:hidden">{tab.savedQueryId ? 'Save' : 'Save…'}</span>
         </button>
         <div className="relative">
           <button className={cx('btn btn-ghost h-7', historyOpen && 'bg-surface-2')} onClick={openHistory} title="Queries run on this connection">
-            <HistoryIcon size={14} /> History
+            <HistoryIcon size={14} /> <span className="@max-[900px]:hidden">History</span>
           </button>
           {historyOpen && (
             <div className="fade-in absolute left-0 top-8 z-30 max-h-80 w-[520px] overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-[var(--shadow)]">
@@ -491,7 +491,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           )}
         </div>
         <button className="btn btn-ghost h-7" onClick={saveSqlFile} title="Save the editor text to a .sql file">
-          <FileDown size={14} /> .sql
+          <FileDown size={14} /> <span className="@max-[900px]:hidden">.sql</span>
         </button>
         <div className="flex-1" />
         {prodLocked(session.config) && <WriteLock unlocked={unlocked} connection={session.config.name} database={database} onUnlock={() => unlockWrites(tab.id)} />}

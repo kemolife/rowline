@@ -26,9 +26,10 @@ export default function WriteLock({ unlocked, connection, database, onUnlock }: 
   };
   return (
     <span className="flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-line bg-surface-2 pl-2 pr-0.5 text-[11.5px] text-ink-2" data-testid="write-lock" title={LOCKED_HINT}>
-      <Lock size={11} className="text-ink-3" /> Read-only (prod)
+      <Lock size={11} className="text-ink-3" /> <span className="@max-[800px]:hidden">Read-only (prod)</span>
       <button className="ml-0.5 h-5 rounded-full px-2 font-medium text-ink hover:bg-surface-3" onClick={unlock} data-testid="unlock-writes" title="Allow changes in this tab only (asks first)">
-        Unlock writes
+        <span className="@max-[560px]:hidden">Unlock writes</span>
+        <span className="hidden @max-[560px]:inline">Unlock</span>
       </button>
     </span>
   );
