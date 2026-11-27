@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "tauri": "tauri",
+    "update": "./scripts/update.sh",
     "devserver": "cargo run --manifest-path src-tauri/Cargo.toml --features devserver --bin devserver"
   },
   "dependencies": {

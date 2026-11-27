@@ -29,14 +29,14 @@ The build is not code-signed. On first launch, use right-click → Open if macOS
 Quit uDB (⌘Q), then in the `rowline` folder:
 
 ```bash
-./scripts/update.sh
+npm run update        # or: ./scripts/update.sh
 ```
 
 It pulls the latest code, builds the app and replaces `/Applications/uDB.app`. Your connections,
 passwords, saved queries and history stay: they live in `~/Library/Application Support/app.rowline.desktop/`
 (see [Where your data lives](#where-your-data-lives)), not inside the app.
 
-- `./scripts/update.sh --no-pull` builds and installs the code you have checked out now (for example a branch).
+- `npm run update -- --no-pull` (or `./scripts/update.sh --no-pull`) builds and installs the code you have checked out now (for example a branch).
 - It stops if uDB is still running or if you have uncommitted changes.
 - If the Dock still shows the old icon, remove uDB from the Dock and add it again.
 
