@@ -143,7 +143,7 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
                 Session::Mysql(_) => a.database.as_deref(),
                 Session::Sqlite(_) => None,
             };
-            let statements = sqlgen::change_set_statements(session.dialect(), db, &a.table, &a.changes)?;
+            let statements = sqlgen::change_set_statements(session.dialect(), db, None, &a.table, &a.changes, &Default::default())?;
             ok(statements.iter().map(sqlgen::preview_sql).collect::<Vec<_>>())
         }
         "apply_changes" => {

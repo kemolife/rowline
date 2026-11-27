@@ -168,6 +168,16 @@ pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
     Ok(text)
 }
 
+/// Upper-case words outside quotes and comments. Read with every lexer we know (backslash escapes on
+/// and off), so a word hidden from one reading still counts. Used by `sqlgen::is_read_only_statement`.
+pub(crate) fn code_words(sql: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for dialect in [Dialect::Mysql, Dialect::Sqlite] {
+        out.extend(words_with_paren(&mask(sql, dialect)).into_iter().map(|(w, _)| w));
+    }
+    out
+}
+
 /// Blanks out string literals, quoted identifiers and comments, so keywords inside them don't count.
 /// Follows the server lexer: MySQL escapes with `\` inside '…' and "…", SQLite never does.
 /// MySQL `/*! … */` and MariaDB `/*M! … */` comments are executed by the server, so their content is kept.

@@ -206,6 +206,9 @@ pub struct SortSpec {
 #[serde(rename_all = "camelCase")]
 pub struct PageRequest {
     pub database: Option<String>,
+    /// Postgres schema of the table; `None` = the connection's selected schema. MySQL and SQLite ignore it.
+    #[serde(default)]
+    pub schema: Option<String>,
     pub table: String,
     /// Raw SQL condition typed by the user, without the WHERE keyword
     #[serde(default)]
