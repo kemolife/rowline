@@ -15,8 +15,8 @@ There is no prebuilt download yet, so build the app from source.
 Requirements: macOS, Rust (stable, 1.90+), Node 22+.
 
 ```bash
-git clone https://github.com/kemolife/rowline.git
-cd rowline
+git clone https://github.com/kemolife/udb.git
+cd udb
 npm install
 npm run tauri build -- --bundles app   # → src-tauri/target/release/bundle/macos/uDB.app
 cp -R src-tauri/target/release/bundle/macos/uDB.app /Applications/
