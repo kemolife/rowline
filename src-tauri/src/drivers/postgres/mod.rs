@@ -66,7 +66,9 @@ pub struct PostgresSession {
     config: Config,
     tls: MakeTlsConnector,
     default_database: String,
-    prod_lock: bool,
+    /// Prod connection: queries run READ ONLY unless the call is unlocked. Atomic: saving the
+    /// connection with another environment changes it without a reconnect (see `set_prod_lock`).
+    prod_lock: std::sync::atomic::AtomicBool,
     /// The Mac's IANA time zone, for `SET LOCAL TimeZone` (timestamptz is shown in local time)
     time_zone: Option<String>,
     /// database -> its clients. Pools are made on first use, so other databases stay usable side by side.
@@ -117,7 +119,7 @@ impl PostgresSession {
             config,
             tls: tls_connector(p.tls)?,
             default_database: p.database.filter(|d| !d.is_empty()).unwrap_or("postgres").to_string(),
-            prod_lock: p.prod_lock,
+            prod_lock: std::sync::atomic::AtomicBool::new(p.prod_lock),
             time_zone: local_time_zone(),
             pools: Mutex::new(HashMap::new()),
             pings: AtomicU64::new(0),
@@ -136,7 +138,12 @@ impl PostgresSession {
 
     /// Writes refused unless the call is unlocked (prod connections).
     pub(super) fn locked(&self, unlocked: bool) -> bool {
-        self.prod_lock && !unlocked
+        self.prod_lock.load(std::sync::atomic::Ordering::SeqCst) && !unlocked
+    }
+
+    /// Turns the prod lock on or off for the next queries (the connection's environment changed).
+    pub fn set_prod_lock(&self, on: bool) {
+        self.prod_lock.store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
     async fn connect_client(&self, database: &str) -> AppResult<Client> {

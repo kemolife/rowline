@@ -253,6 +253,16 @@ impl Manager {
         self.sessions.read().await.get(id).cloned().ok_or_else(|| AppError::NotConnected(id.to_string()))
     }
 
+    /// A saved connection changed: settings that apply without a reconnect go to its open session.
+    /// Today that is the Postgres prod lock, so switching a connection to Production locks it at once.
+    pub async fn apply_config(&self, config: &ConnectionConfig) {
+        if let Some(session) = self.sessions.read().await.get(&config.id) {
+            if let Session::Postgres(s) = session.as_ref() {
+                s.set_prod_lock(config.environment == Environment::Prod);
+            }
+        }
+    }
+
     pub async fn remove(&self, id: &str) {
         self.sessions.write().await.remove(id);
         self.set_database(id, None);

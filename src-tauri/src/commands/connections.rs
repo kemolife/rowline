@@ -28,7 +28,11 @@ pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "d
 pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
     match command {
         "list_connections" => ok(state.store.connections()?),
-        "save_connection" => ok(save_connection(state, parse(args)?)?),
+        "save_connection" => {
+            let saved = save_connection(state, parse(args)?)?;
+            state.manager.apply_config(&saved).await;
+            ok(saved)
+        }
         "delete_connection" => {
             let a: IdArgs = parse(args)?;
             state.manager.remove(&a.id).await;

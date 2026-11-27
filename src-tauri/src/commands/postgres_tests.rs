@@ -94,3 +94,22 @@ async fn postgres_backup_is_not_offered() {
         assert_eq!(err, "Backup is not available for PostgreSQL yet.");
     }
 }
+
+#[tokio::test]
+async fn changing_the_environment_to_prod_locks_the_open_session_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let Some((state, id)) = postgres_state(dir.path(), "dev", None).await else { return };
+    let mut config = serde_json::to_value(state.store.connection(&id).unwrap()).unwrap();
+    // the app saves without reconnecting when only the environment changes
+    config["environment"] = json!("prod");
+    dispatch(&state, "save_connection", config.clone()).await.unwrap();
+    let ro = dispatch(&state, "execute_sql", json!({ "id": id, "sql": "show transaction_read_only" })).await.unwrap();
+    assert_eq!(ro[0]["rows"][0][0], "on", "prod must be locked without a reconnect");
+    let err = dispatch(&state, "execute_sql", json!({ "id": id, "sql": "update customers set name = name where id = 1" })).await.unwrap_err().to_string();
+    assert_eq!(err, UNLOCK_MESSAGE);
+    // and back: dev is not locked
+    config["environment"] = json!("dev");
+    dispatch(&state, "save_connection", config).await.unwrap();
+    let ro = dispatch(&state, "execute_sql", json!({ "id": id, "sql": "show transaction_read_only" })).await.unwrap();
+    assert_eq!(ro[0]["rows"][0][0], "off");
+}
