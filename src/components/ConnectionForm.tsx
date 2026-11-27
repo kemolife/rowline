@@ -7,8 +7,10 @@ import { ENV_LABEL, cx, envColor } from '../lib/ui';
 import { useApp } from '../store/app';
 import { EngineBadge } from './StartScreen';
 import { defaultTls, tlsWarning } from '../lib/tls';
+import { defaultPort, defaultUser, engineLabel, isServer } from '../lib/engine';
 
 const ENVS: Environment[] = ['local', 'dev', 'staging', 'prod'];
+const ENGINES: Engine[] = ['mysql', 'postgres', 'sqlite'];
 const TLS_MODES: { mode: TlsMode; label: string; hint: string }[] = [
   { mode: 'off', label: 'Off', hint: 'Plain connection, for local servers.' },
   { mode: 'required', label: 'Required', hint: 'Encrypted. The certificate is not checked (works with AWS RDS and private CAs).' },
@@ -55,16 +57,17 @@ export default function ConnectionForm() {
 
   // a new connection to a remote host checks the server unless the user picks another mode; saved ones keep theirs
   const tls: TlsMode = form.tls ?? (isNew ? defaultTls(form.host) : 'off');
-  const tlsWarn = form.engine === 'mysql' ? tlsWarning({ engine: form.engine, host: form.host, tls }) : null;
+  const server = isServer(form.engine);
+  const tlsWarn = tlsWarning({ engine: form.engine, host: form.host, tls });
 
   const payload = (): ConnectionInput => ({
     ...form,
-    tls: form.engine === 'mysql' ? tls : form.tls,
+    tls: server ? tls : form.tls,
     name: form.name.trim() || defaultName(form),
-    port: form.engine === 'mysql' ? Number(form.port) || 3306 : null,
+    port: server ? Number(form.port) || defaultPort(form.engine) : null,
     // Claude off: no folder for Claude to read
     projectFolder: effectiveClaudeAccess(form) === 'off' ? null : form.projectFolder?.trim() || null,
-    password: form.engine === 'mysql' && passwordTouched ? (form.password ?? '') : undefined,
+    password: server && passwordTouched ? (form.password ?? '') : undefined,
   });
 
   // databases on the server, loaded when the Database field gets focus (once per host / user / password)
@@ -72,7 +75,7 @@ export default function ConnectionForm() {
   const dbKey = JSON.stringify([form.host, form.port, form.user, passwordTouched ? form.password : '(saved)', tls, form.id]);
   const dbReq = useRef(0);
   const loadDatabases = async () => {
-    if (form.engine !== 'mysql' || (dbs?.key === dbKey && !dbs.error)) return;
+    if (!server || (dbs?.key === dbKey && !dbs.error)) return;
     const req = ++dbReq.current;
     setDbs({ key: dbKey, names: null, error: null, loading: true });
     try {
@@ -117,7 +120,17 @@ export default function ConnectionForm() {
     if (path) set({ filePath: path, name: form.name || fileName(path) });
   };
 
-  const switchEngine = (engine: Engine) => set(engine === 'mysql' ? { engine, host: form.host || '127.0.0.1', port: form.port || 3306, user: form.user || 'root' } : { engine });
+  // a server engine gets its default port and user, unless the form has values that are not another engine's defaults
+  const switchEngine = (engine: Engine) => {
+    if (!isServer(engine)) return set({ engine });
+    const isDefault = <T,>(v: T | null | undefined, of: (e: Engine) => T | null) => v == null || v === '' || ENGINES.some((e) => of(e) === v);
+    set({
+      engine,
+      host: form.host || '127.0.0.1',
+      port: isDefault(form.port, defaultPort) ? defaultPort(engine) : form.port,
+      user: isDefault(form.user, defaultUser) ? defaultUser(engine) : form.user,
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-[2px]" onMouseDown={() => setEditing(null)}>
@@ -137,8 +150,8 @@ export default function ConnectionForm() {
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4" data-testid="connection-form-body">
-          <div className="grid grid-cols-2 gap-2">
-            {(['mysql', 'sqlite'] as Engine[]).map((e) => (
+          <div className="grid grid-cols-3 gap-2">
+            {ENGINES.map((e) => (
               <button
                 type="button"
                 key={e}
@@ -149,9 +162,9 @@ export default function ConnectionForm() {
                 )}
               >
                 <EngineBadge engine={e} size={28} />
-                <div>
-                  <div className="text-[13px] font-medium">{e === 'mysql' ? 'MySQL' : 'SQLite'}</div>
-                  <div className="text-[11.5px] text-ink-3">{e === 'mysql' ? 'Server connection' : 'Local database file'}</div>
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-medium">{engineLabel(e)}</div>
+                  <div className="truncate text-[11.5px] text-ink-3">{isServer(e) ? 'Server connection' : 'Local database file'}</div>
                 </div>
               </button>
             ))}
@@ -219,10 +232,16 @@ export default function ConnectionForm() {
                 </button>
               ))}
             </div>
-            {form.environment === 'prod' && <p className="text-[11.5px] text-ink-3">Statements that change data ask for confirmation before they run.</p>}
+            {form.environment === 'prod' && (
+              <p className="text-[11.5px] text-ink-3">
+                {form.engine === 'postgres'
+                  ? 'Read-only in uDB. A tab can unlock writes after a confirmation; Claude and udb always stay read-only.'
+                  : 'Statements that change data ask for confirmation before they run.'}
+              </p>
+            )}
           </div>
 
-          {form.engine === 'mysql' ? (
+          {server ? (
             <>
               <div className="grid grid-cols-[1fr_96px] gap-2">
                 <label className="block space-y-1.5">

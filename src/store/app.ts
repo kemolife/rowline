@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { api, confirmDialog } from '../lib/api';
 import type { FilterRule } from '../lib/filters';
 import { useMemo } from 'react';
+import { isServer, pickSchema } from '../lib/engine';
 import { effectiveProjects, insertGrouped, type ProjectInfo } from '../lib/projects';
 import type { ConnectionConfig, ConnectionInput, DbObject, ObjectKind, ServerInfo, SortSpec } from '../lib/types';
 
@@ -23,6 +24,8 @@ export interface TableTab {
   sqlFilter?: string;
   filterMode?: 'chips' | 'sql';
   sort?: SortSpec[];
+  /** prod Postgres: the user unlocked writes in this tab. Never saved; gone when the tab closes. */
+  writesUnlocked?: boolean;
 }
 
 export interface TableOpenOptions {
@@ -44,6 +47,8 @@ export interface QueryTab {
   savedQueryId?: string;
   /** rows fetched per statement; 0 = no limit */
   maxRows?: number;
+  /** prod Postgres: the user unlocked writes in this tab. Never saved; gone when the tab closes. */
+  writesUnlocked?: boolean;
 }
 
 /** Relation diagram of one database */
@@ -70,6 +75,10 @@ export interface Session {
   info: ServerInfo;
   databases: string[];
   database: string | null;
+  /** user schemas of the selected database (Postgres; [] for MySQL and SQLite) */
+  schemas: string[];
+  /** the schema the sidebar shows (Postgres); null for MySQL and SQLite, or a database without user schemas */
+  schema: string | null;
   objects: DbObject[];
   loadingObjects: boolean;
 }
@@ -122,7 +131,12 @@ export interface AppState {
   /** Disconnects first when open; false when the user kept it open (unsaved changes). Throws on backend errors. */
   deleteConnection: (id: string) => Promise<boolean>;
   selectDatabase: (cid: string, db: string) => Promise<void>;
+  /** Reloads the tables of the selected database (Postgres: also its schemas, keeping the selected one when it still exists) */
   refreshObjects: (cid: string) => Promise<void>;
+  /** Shows another Postgres schema in the sidebar (and makes it the default for Claude and `udb`) */
+  setSchema: (cid: string, schema: string) => Promise<void>;
+  /** Lets this tab change data on a prod Postgres connection; other tabs stay read-only */
+  unlockWrites: (cid: string, tabId: string) => void;
   openTable: (cid: string, name: string, kind?: ObjectKind, view?: 'data' | 'structure', opts?: TableOpenOptions) => void;
   /** pinned tables per connection and database (sidebar) */
   pinned: Record<string, string[]>;
@@ -275,15 +289,15 @@ export const useApp = create<AppState>((set, get) => {
       set({ connecting: id });
       try {
         const info = await api.connect(id);
-        const databases = config.engine === 'mysql' ? await api.listDatabases(id) : ['main'];
-        const database = config.engine === 'mysql' ? config.database || info.currentDatabase || null : null;
+        const databases = isServer(config.engine) ? await api.listDatabases(id) : ['main'];
+        const database = isServer(config.engine) ? config.database || info.currentDatabase || null : null;
         api.setActiveDatabase(id, database).catch(() => {});
         const restored = loadSavedTabs(id);
         set({
           workspaces: {
             ...get().workspaces,
             [id]: {
-              session: { connectionId: id, config, info, databases, database, objects: [], loadingObjects: false },
+              session: { connectionId: id, config, info, databases, database, schemas: [], schema: null, objects: [], loadingObjects: false },
               tabs: restored.tabs,
               activeTabId: restored.activeTabId,
               dirtyTabs: {},
@@ -295,7 +309,7 @@ export const useApp = create<AppState>((set, get) => {
           launcherOpen: false,
         });
         writeJson('rowline.lastUsed', get().lastUsed);
-        if (config.engine === 'sqlite' || database) await get().refreshObjects(id);
+        if (!isServer(config.engine) || database) await get().refreshObjects(id);
       } catch (e) {
         get().toast((e as Error).message, 'error');
       } finally {
@@ -324,12 +338,13 @@ export const useApp = create<AppState>((set, get) => {
       try {
         await api.disconnect(id).catch(() => undefined);
         const info = await api.connect(id);
-        const databases = config.engine === 'mysql' ? await api.listDatabases(id) : ['main'];
+        const databases = isServer(config.engine) ? await api.listDatabases(id) : ['main'];
         const current = w.session.database;
-        const database =
-          config.engine === 'mysql' ? (current && databases.includes(current) ? current : config.database || info.currentDatabase || null) : null;
-        patchSession(id, () => ({ config, info, databases, database, objects: [] }));
-        if (config.engine === 'sqlite' || database) await get().refreshObjects(id);
+        const database = isServer(config.engine) ? (current && databases.includes(current) ? current : config.database || info.currentDatabase || null) : null;
+        // the schema stays when the database stays (refreshObjects checks it still exists); the backend forgot it on disconnect
+        const schema = config.engine === 'postgres' && database === current ? w.session.schema : null;
+        patchSession(id, () => ({ config, info, databases, database, schemas: [], schema, objects: [] }));
+        if (!isServer(config.engine) || database) await get().refreshObjects(id);
         get().toast(`Reconnected to ${config.name}`, 'success');
       } catch (e) {
         get().toast((e as Error).message, 'error');
@@ -390,7 +405,8 @@ export const useApp = create<AppState>((set, get) => {
     selectDatabase: async (cid, db) => {
       const w = get().workspaces[cid];
       if (!w || w.session.database === db) return;
-      patchSession(cid, () => ({ database: db, objects: [] }));
+      // Postgres: the new database gets its own schemas and default schema
+      patchSession(cid, () => ({ database: db, schemas: [], schema: null, objects: [] }));
       api.setActiveDatabase(cid, db).catch(() => {});
       await get().refreshObjects(cid);
     },
@@ -398,16 +414,39 @@ export const useApp = create<AppState>((set, get) => {
     refreshObjects: async (cid) => {
       const w = get().workspaces[cid];
       if (!w) return;
-      const database = w.session.database;
+      const { database, schema } = w.session;
       patchSession(cid, () => ({ loadingObjects: true }));
       try {
-        const objects = await api.listObjects(cid, database);
-        patchSession(cid, (s) => (s.database === database ? { objects, loadingObjects: false } : {}));
+        if (w.session.config.engine !== 'postgres') {
+          const objects = await api.listObjects(cid, database);
+          patchSession(cid, (s) => (s.database === database ? { objects, loadingObjects: false } : {}));
+          return;
+        }
+        const schemas = database ? await api.listSchemas(cid, database) : [];
+        const picked =
+          schema && schemas.includes(schema) ? { schema, objects: await api.listObjects(cid, database, schema) } : await pickSchema(schemas, (sc) => api.listObjects(cid, database, sc));
+        let applied = false;
+        patchSession(cid, (s) => {
+          // the user picked another database or schema meanwhile: that load wins
+          if (s.database !== database || s.schema !== schema) return {};
+          applied = true;
+          return { schemas, schema: picked.schema, objects: picked.objects, loadingObjects: false };
+        });
+        if (applied) api.setActiveSchema(cid, picked.schema).catch(() => {});
       } catch (e) {
         patchSession(cid, () => ({ loadingObjects: false }));
         get().toast((e as Error).message, 'error');
       }
     },
+
+    setSchema: async (cid, schema) => {
+      const w = get().workspaces[cid];
+      if (!w || w.session.config.engine !== 'postgres' || w.session.schema === schema) return;
+      patchSession(cid, () => ({ schema, objects: [] }));
+      await get().refreshObjects(cid);
+    },
+
+    unlockWrites: (cid, id) => patchWs(cid, (w) => ({ tabs: w.tabs.map((t) => (t.id === id && t.kind !== 'diagram' ? { ...t, writesUnlocked: true } : t)) })),
 
     openTable: (cid, name, kind = 'table', view = 'data', opts = {}) => {
       const w = get().workspaces[cid];
@@ -604,11 +643,18 @@ function loadSavedTabs(connectionId: string): { tabs: Tab[]; activeTabId: string
   try {
     const saved = JSON.parse(localStorage.getItem(TABS_KEY(connectionId)) ?? 'null') as { tabs: Omit<Tab, 'id'>[]; active: number } | null;
     if (!saved?.tabs?.length) return { tabs: [], activeTabId: null };
-    const tabs = saved.tabs.map((t) => ({ ...t, id: newTabId(), autoRun: undefined }) as Tab);
+    const tabs = saved.tabs.map((t) => ({ ...withoutUnlock(t as Tab), id: newTabId(), autoRun: undefined }) as Tab);
     return { tabs, activeTabId: tabs[Math.min(Math.max(saved.active, 0), tabs.length - 1)]?.id ?? null };
   } catch {
     return { tabs: [], activeTabId: null };
   }
+}
+
+/** A tab without its write unlock: the unlock is never saved or restored */
+function withoutUnlock<T extends Tab>(t: T): T {
+  if (!('writesUnlocked' in t)) return t;
+  const { writesUnlocked: _unlocked, ...rest } = t;
+  return rest as T;
 }
 
 const saveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
@@ -622,7 +668,7 @@ useApp.subscribe((state, prev) => {
     clearTimeout(saveTimers[cid]);
     saveTimers[cid] = setTimeout(() => {
       try {
-        localStorage.setItem(TABS_KEY(cid), JSON.stringify({ tabs: tabs.map(({ id: _id, ...rest }) => ({ ...rest, autoRun: undefined })), active }));
+        localStorage.setItem(TABS_KEY(cid), JSON.stringify({ tabs: tabs.map((t) => ({ ...withoutUnlock(t), id: undefined, autoRun: undefined })), active }));
       } catch {
         /* storage not available */
       }

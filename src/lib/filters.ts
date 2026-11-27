@@ -1,3 +1,4 @@
+import { quoteIdent } from './engine';
 import { isSqlExpr, type Cell, type Engine } from './types';
 
 /** Column filters of a table tab ("chips"), turned into the WHERE clause the backend runs. */
@@ -47,9 +48,7 @@ export function newRule(column: string, op: FilterOp = '=', value = ''): FilterR
   return { id: `f${Date.now().toString(36)}${++ruleSeq}`, enabled: true, column, op, value };
 }
 
-export function quoteIdent(engine: Engine, name: string): string {
-  return engine === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : `"${name.replace(/"/g, '""')}"`;
-}
+export { quoteIdent };
 
 /** A string literal; MySQL also treats backslash as an escape character in strings. */
 export function stringLiteral(engine: Engine, s: string): string {
