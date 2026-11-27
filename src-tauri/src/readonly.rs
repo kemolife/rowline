@@ -137,7 +137,7 @@ pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
         // the server ends `--` comments at \r: refused outright, so no reading of it can differ
         return Err(AppError::msg("Read-only queries can't contain a carriage return (\\r). Use plain line breaks (\\n)."));
     }
-    let statements = sqlgen::split_statements(sql);
+    let statements = sqlgen::split_statements_for(sql, dialect);
     let text = match statements.as_slice() {
         [] => return Err(AppError::msg("The query is empty.")),
         [one] => one.text.trim().trim_end_matches(';').trim().to_string(),

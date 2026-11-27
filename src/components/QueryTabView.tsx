@@ -105,10 +105,10 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
     async (text: string) => {
       if (running || !text.trim()) return;
       // UPDATE / DELETE without WHERE: changes every row, ask first
-      const allRows = (await api.splitStatements(text)).map((p) => p.text).filter(updatesAllRows);
+      const allRows = (await api.splitStatements(text, engine)).map((p) => p.text).filter(updatesAllRows);
       if (allRows.length && !(await confirmDialog(`This changes EVERY row (no WHERE):\n\n${allRows.map((t) => t.slice(0, 200)).join('\n\n')}\n\nRun it?`, { title: 'No WHERE', danger: true }))) return;
       // a locked tab runs read-only on the server, so nothing can change: no question needed
-      if (session.config.environment === 'prod' && !locked && !(await api.isReadOnly(text))) {
+      if (session.config.environment === 'prod' && !locked && !(await api.isReadOnly(text, engine))) {
         if (!(await confirmDialog('This is a PRODUCTION connection and the SQL changes data or schema.\n\nRun it?', { title: 'Production', danger: true }))) return;
       }
       setRunning(true);
@@ -156,7 +156,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       if (sel.from !== sel.to) text = doc.slice(sel.from, sel.to);
       else if (mode === 'selection') return;
       else if (mode === 'current') {
-        const parts = await api.splitStatements(doc);
+        const parts = await api.splitStatements(doc, engine);
         // character offsets from the backend; CodeMirror uses UTF-16 offsets
         const cursorChars = [...doc.slice(0, sel.head)].length;
         const hit = parts.find((p) => cursorChars >= p.start && cursorChars <= p.end + 1) ?? [...parts].reverse().find((p) => p.start <= cursorChars) ?? parts[0];
@@ -164,7 +164,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       }
       await runText(text);
     },
-    [runText],
+    [runText, engine],
   );
 
   /** Formats the selection, or the whole editor */
@@ -216,7 +216,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       if (!view) return;
       const doc = view.state.doc.toString();
       api
-        .splitStatements(doc)
+        .splitStatements(doc, engine)
         .then((ranges) => {
           const v = editorRef.current?.view;
           if (v && v.state.doc.toString() === doc) v.dispatch({ effects: setStatements.of(toEditorStatements(doc, ranges)) });
@@ -224,7 +224,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         .catch(() => undefined);
     }, 250);
     return () => clearTimeout(t);
-  }, [sql]);
+  }, [sql, engine]);
 
   useEffect(() => {
     if (!tab.autoRun) return;

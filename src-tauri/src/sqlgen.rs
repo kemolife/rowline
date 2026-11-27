@@ -425,9 +425,20 @@ pub(crate) fn skip_dollar_quote(chars: &[char], i: usize, len: usize) -> usize {
     chars.len()
 }
 
-/// Splits a script on `;`, ignoring semicolons inside quotes, backticks, Postgres dollar quotes and comments.
-/// Offsets are character (not byte) offsets so the editor can use them directly.
+/// Splits a script with the MySQL rules (also used for SQLite). See `split_statements_for`.
 pub fn split_statements(sql: &str) -> Vec<StatementRange> {
+    split_statements_for(sql, Dialect::Mysql)
+}
+
+/// Splits a script on `;`, ignoring semicolons inside quotes, comments and dollar quotes.
+/// MySQL / SQLite: backslash escapes in '…' and "…", backtick names, `#` comments.
+/// Postgres follows its own lexer: backslash escapes only in E'…', no backticks or `#` comments, nested
+/// `/* */`, and `--` ends at \r as well as \n.
+/// Offsets are character (not byte) offsets so the editor can use them directly.
+pub fn split_statements_for(sql: &str, dialect: Dialect) -> Vec<StatementRange> {
+    if dialect == Dialect::Postgres {
+        return split_postgres(sql);
+    }
     let chars: Vec<char> = sql.chars().collect();
     let mut res = Vec::new();
     let mut start = 0;
@@ -499,6 +510,111 @@ pub fn split_statements(sql: &str) -> Vec<StatementRange> {
     }
     push(&mut res, start, chars.len().min(i.max(start)));
     res
+}
+
+/// Adds the part `chars[s..e]` unless it is blank or only comments.
+fn push_part(res: &mut Vec<StatementRange>, chars: &[char], s: usize, e: usize, only_comments: impl Fn(&str) -> bool) {
+    let text: String = chars[s..e].iter().collect();
+    let trimmed = text.trim();
+    if trimmed.is_empty() || only_comments(trimmed) {
+        return;
+    }
+    let lead = text.chars().take_while(|c| c.is_whitespace()).count();
+    let trail = text.chars().rev().take_while(|c| c.is_whitespace()).count();
+    res.push(StatementRange { start: s + lead, end: e - trail, text: trimmed.to_string() });
+}
+
+/// The Postgres half of `split_statements_for`.
+fn split_postgres(sql: &str) -> Vec<StatementRange> {
+    let chars: Vec<char> = sql.chars().collect();
+    let only_comments = |t: &str| pg_skip_comments(&t.chars().collect::<Vec<_>>(), 0) >= t.chars().count();
+    let mut res = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\'' => {
+                // E'…' (not part of a longer name) has backslash escapes
+                let escapes = i >= 1 && matches!(chars[i - 1], 'e' | 'E') && (i < 2 || !pg_ident_cont(chars[i - 2]));
+                i += 1;
+                while i < chars.len() {
+                    if escapes && chars[i] == '\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if chars[i] == '\'' {
+                        if chars.get(i + 1) == Some(&'\'') {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            '"' => {
+                i += 1;
+                while i < chars.len() {
+                    if chars[i] == '"' {
+                        if chars.get(i + 1) == Some(&'"') {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            '$' if dollar_tag_len(&chars, i).is_some() => {
+                let len = dollar_tag_len(&chars, i).unwrap_or(1);
+                i = skip_dollar_quote(&chars, i, len);
+            }
+            '-' | '/' if pg_skip_comments(&chars, i) > i => i = pg_skip_comments(&chars, i),
+            ';' => {
+                push_part(&mut res, &chars, start, i, only_comments);
+                i += 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    push_part(&mut res, &chars, start, chars.len().min(i.max(start)), only_comments);
+    res
+}
+
+/// Index after the whitespace and Postgres comments that start at `i` (`--` to \n or \r, nested `/* */`).
+pub(crate) fn pg_skip_comments(chars: &[char], mut i: usize) -> usize {
+    loop {
+        match (chars.get(i), chars.get(i + 1)) {
+            (Some(c), _) if c.is_whitespace() => i += 1,
+            (Some('-'), Some('-')) => {
+                while i < chars.len() && chars[i] != '\n' && chars[i] != '\r' {
+                    i += 1;
+                }
+            }
+            (Some('/'), Some('*')) => {
+                let mut depth = 0;
+                while i < chars.len() {
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            _ => return i,
+        }
+    }
 }
 
 fn is_only_comments(text: &str) -> bool {
@@ -848,6 +964,41 @@ mod tests {
         assert_eq!(split_statements("select e'a\\\\'; select 1").len(), 2);
         // $1 is a parameter and a$b an identifier, not dollar quotes
         assert_eq!(split_statements("select $1; select a$b$ from t; select 3").len(), 3);
+    }
+
+    fn pg_parts(sql: &str) -> Vec<String> {
+        split_statements_for(sql, Dialect::Postgres).into_iter().map(|s| s.text).collect()
+    }
+
+    #[test]
+    fn postgres_split_follows_the_postgres_lexer() {
+        // a backslash escapes only in E'…' strings (standard_conforming_strings = on)
+        assert_eq!(pg_parts("select 'C:\\'; select 2"), vec!["select 'C:\\'", "select 2"]);
+        assert_eq!(pg_parts("select E'it\\'s;'; select 1"), vec!["select E'it\\'s;'", "select 1"]);
+        assert_eq!(pg_parts("select \"a\\\"; select 2"), vec!["select \"a\\\"", "select 2"]);
+        // `#` is an operator, backticks are not quotes, block comments nest
+        assert_eq!(pg_parts("select 1 # 2; select 3"), vec!["select 1 # 2", "select 3"]);
+        assert_eq!(pg_parts("select `a; select 2`"), vec!["select `a", "select 2`"]);
+        assert_eq!(pg_parts("select /* a /* b */ ; */ 1; select 2"), vec!["select /* a /* b */ ; */ 1", "select 2"]);
+        // `--` ends at \r as well as \n
+        assert_eq!(pg_parts("--x\rCOMMIT\nWORK; delete from t"), vec!["--x\rCOMMIT\nWORK", "delete from t"]);
+        assert_eq!(pg_parts("select $$a;b$$; select 2"), vec!["select $$a;b$$", "select 2"]);
+        // the offsets still point into the text
+        let sql = "  select 'é\\';\nselect 2";
+        let chars: Vec<char> = sql.chars().collect();
+        for s in split_statements_for(sql, Dialect::Postgres) {
+            assert_eq!(chars[s.start..s.end].iter().collect::<String>(), s.text);
+        }
+    }
+
+    #[test]
+    fn mysql_and_sqlite_split_as_before() {
+        for d in [Dialect::Mysql, Dialect::Sqlite] {
+            assert_eq!(split_statements_for("select 'C:\\'; select 2", d).len(), 1, "{d:?}");
+            assert_eq!(split_statements_for("select 1 # 2; select 3", d).len(), 1, "{d:?}");
+            assert_eq!(split_statements_for("select `a; b`; select 2", d).len(), 2, "{d:?}");
+        }
+        assert_eq!(split_statements("select 'C:\\'; select 2").len(), 1, "the default is MySQL");
     }
 
     #[test]

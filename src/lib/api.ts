@@ -1,6 +1,7 @@
 import type { SchemaSnapshot, SchemaTable } from './schemaDiff';
 import type { VirtualKey } from './virtualKeys';
 import type {
+  Engine,
   ChangeSet,
   ChatConnection,
   ChatEvent,
@@ -102,8 +103,9 @@ export const api = {
    */
   saveSchemaSnapshot: (id: string, database: string | null, schema?: string | null, snapshotKey?: string | null) =>
     call<SchemaSnapshot>('schema_snapshot_save', { id, database, schema, snapshotKey }),
-  splitStatements: (sql: string) => call<StatementRange[]>('split_statements', { sql }),
-  isReadOnly: (sql: string) => call<boolean>('is_read_only', { sql }),
+  /** engine picks the lexer rules (Postgres: backslash escapes only in E'…'); absent = MySQL rules */
+  splitStatements: (sql: string, engine?: Engine) => call<StatementRange[]>('split_statements', { sql, engine }),
+  isReadOnly: (sql: string, engine?: Engine) => call<boolean>('is_read_only', { sql, engine }),
   listHistory: (connectionId?: string) => call<HistoryEntry[]>('list_history', { connectionId }),
   listSavedQueries: (connectionId: string) => call<SavedQuery[]>('list_saved_queries', { connectionId }),
   saveQuery: (q: { id?: string; connectionId: string; name: string; sql: string; database: string | null }) => call<SavedQuery>('save_query', { ...q }),

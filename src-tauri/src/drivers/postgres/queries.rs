@@ -96,7 +96,7 @@ impl PostgresSession {
         unlocked: bool,
     ) -> AppResult<Vec<QueryResult>> {
         let locked = self.locked(unlocked);
-        let statements = sqlgen::split_statements(sql);
+        let statements = sqlgen::split_statements_for(sql, Dialect::Postgres);
         if statements.is_empty() {
             return Ok(Vec::new());
         }
