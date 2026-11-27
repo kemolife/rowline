@@ -14,10 +14,12 @@ mod connections;
 mod data;
 mod files;
 mod jobs;
+#[cfg(test)]
+mod postgres_tests;
 mod queries;
 mod schema;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use connections::project_folder;
 

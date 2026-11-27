@@ -149,7 +149,7 @@ pub fn system_prompt(has_project_folder: bool) -> String {
         "You are the assistant inside uDB, a desktop database client. Answer the user's questions about their databases.\n\
          Use the rowline tools: list_connections first, then list_tables and describe_table, then run_select.\n\
          You can only read data. Never say or imply that you changed data.\n\
-         Write SQL for the connection's engine (MySQL or SQLite). Select only the columns you need and use LIMIT.\n\
+         Write SQL for the connection's engine (MySQL, PostgreSQL or SQLite). Select only the columns you need and use LIMIT.\n\
          When an answer is based on a query, mention the query briefly. Answer briefly, in the user's language.",
     );
     if has_project_folder {

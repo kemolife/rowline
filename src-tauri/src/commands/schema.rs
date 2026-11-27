@@ -11,13 +11,16 @@ struct SchemaArgs {
     id: String,
     #[serde(default)]
     database: Option<String>,
+    /// Postgres schema of the diagram (None = server default); MySQL and SQLite ignore it
+    #[serde(default)]
+    schema: Option<String>,
 }
 
 /// The diagram should never spin forever: a slow server ends with a message
 const GRAPH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-async fn read_graph(session: &crate::manager::Session, database: Option<&str>) -> AppResult<Vec<crate::model::SchemaTable>> {
-    tokio::time::timeout(GRAPH_TIMEOUT, session.schema_graph(database))
+async fn read_graph(session: &crate::manager::Session, database: Option<&str>, schema: Option<&str>) -> AppResult<Vec<crate::model::SchemaTable>> {
+    tokio::time::timeout(GRAPH_TIMEOUT, session.schema_graph(database, schema))
         .await
         .map_err(|_| AppError::Timeout(format!("reading the schema took longer than {} s", GRAPH_TIMEOUT.as_secs())))?
 }
@@ -37,7 +40,7 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "schema_graph" => {
             let a: SchemaArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            ok(read_graph(&session, a.database.as_deref()).await?)
+            ok(read_graph(&session, a.database.as_deref(), a.schema.as_deref()).await?)
         }
         "schema_snapshots" => {
             let a: SchemaArgs = parse(args)?;
@@ -47,7 +50,7 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "schema_snapshot_save" => {
             let a: SchemaArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            let tables = read_graph(&session, a.database.as_deref()).await?;
+            let tables = read_graph(&session, a.database.as_deref(), a.schema.as_deref()).await?;
             ok(state.store.add_schema_snapshot(&a.id, a.database.as_deref(), tables)?)
         }
         "list_virtual_keys" => {

@@ -109,14 +109,15 @@ fn tool_list(state: &AppState, chat_id: &str) -> AppResult<Value> {
     let chat = state.claude.chat(chat_id)?;
     let any_data = visible(state, &chat).iter().any(|c| c.claude_access() == ClaudeAccess::Data);
     let conn = || json!({ "type": "string", "description": "Connection id from list_connections" });
-    let db = || json!({ "type": "string", "description": "MySQL database (schema). Default: the database selected in uDB" });
+    let db = || json!({ "type": "string", "description": "MySQL or PostgreSQL database. Default: the database selected in uDB" });
+    let schema = || json!({ "type": "string", "description": "PostgreSQL schema. Default: the schema selected in uDB, else public. Ignored for MySQL and SQLite" });
     let mut tools = vec![
-        json!({ "name": "list_connections", "description": "Database connections you may use in this chat: id, name, engine (mysql or sqlite), environment, selected database and access level.", "inputSchema": { "type": "object", "properties": {} } }),
-        json!({ "name": "list_tables", "description": "Tables and views of a connection, with estimated row counts.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db() }, "required": ["connection"] } }),
-        json!({ "name": "describe_table", "description": "Columns (type, nullable, default, primary key), indexes and foreign keys of one table.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db(), "table": { "type": "string" } }, "required": ["connection", "table"] } }),
+        json!({ "name": "list_connections", "description": "Database connections you may use in this chat: id, name, engine (mysql, postgres or sqlite), environment, selected database and schema, and access level.", "inputSchema": { "type": "object", "properties": {} } }),
+        json!({ "name": "list_tables", "description": "Tables and views of a connection, with estimated row counts.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db(), "schema": schema() }, "required": ["connection"] } }),
+        json!({ "name": "describe_table", "description": "Columns (type, nullable, default, primary key), indexes and foreign keys of one table.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db(), "schema": schema(), "table": { "type": "string" } }, "required": ["connection", "table"] } }),
     ];
     if any_data {
-        tools.push(json!({ "name": "run_select", "description": "Run ONE read-only statement (SELECT, SHOW, EXPLAIN, WITH … SELECT). Returns at most 200 rows; long values are cut to 2 KB. On Production connections the user must approve each query.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db(), "sql": { "type": "string" } }, "required": ["connection", "sql"] } }));
+        tools.push(json!({ "name": "run_select", "description": "Run ONE read-only statement (SELECT, SHOW, EXPLAIN, WITH … SELECT). Returns at most 200 rows; long values are cut to 2 KB. On Production connections the user must approve each query.", "inputSchema": { "type": "object", "properties": { "connection": conn(), "database": db(), "schema": schema(), "sql": { "type": "string" } }, "required": ["connection", "sql"] } }));
     }
     Ok(json!({ "tools": tools }))
 }
@@ -126,6 +127,7 @@ fn tool_list(state: &AppState, chat_id: &str) -> AppResult<Value> {
 struct ToolArgs {
     connection: Option<String>,
     database: Option<String>,
+    schema: Option<String>,
     table: Option<String>,
     sql: Option<String>,
 }
@@ -147,7 +149,8 @@ async fn call_tool(state: &AppState, chat_id: &str, params: &Value) -> Value {
     let call_id = uuid::Uuid::new_v4().to_string();
     let hub = &state.claude.hub;
     let db = tool_database(state, chat_id, &args);
-    hub.push(chat_id, ChatEvent::ToolCall { call_id: call_id.clone(), tool: name.clone(), connection: args.connection.clone(), database: db, sql: args.sql.clone() });
+    let schema = tool_schema(state, chat_id, &args);
+    hub.push(chat_id, ChatEvent::ToolCall { call_id: call_id.clone(), tool: name.clone(), connection: args.connection.clone(), database: db, schema, sql: args.sql.clone() });
     let started = std::time::Instant::now();
     let stop = state.claude.stop_signal(chat_id);
     let res = tokio::select! {
@@ -183,6 +186,7 @@ async fn run_tool(state: &AppState, chat_id: &str, name: &str, a: &ToolArgs) -> 
                     json!({
                         "id": c.id, "name": c.name, "engine": c.engine, "environment": c.environment,
                         "database": chat.database_for(&c.id).or_else(|| c.database.clone()),
+                        "schema": active_schema(state, c, None),
                         "access": c.claude_access(),
                     })
                 })
@@ -191,13 +195,21 @@ async fn run_tool(state: &AppState, chat_id: &str, name: &str, a: &ToolArgs) -> 
         }
         "list_tables" => {
             let (c, s) = resolve(state, &chat, a).await?;
-            let objects = s.objects(database(&chat, &c, a).as_deref()).await?;
+            let db = database(&chat, &c, a);
+            guard(&s, db.as_deref()).await?;
+            let schema = active_schema(state, &c, a.schema.as_deref());
+            readonly::blocked_schema(schema.as_deref())?;
+            let objects = s.objects(db.as_deref(), schema.as_deref()).await?;
             text_output(&objects, Some(objects.len()))
         }
         "describe_table" => {
             let (c, s) = resolve(state, &chat, a).await?;
             let table = a.table.as_deref().ok_or_else(|| AppError::msg("table is required"))?;
-            let structure = s.structure(database(&chat, &c, a).as_deref(), table).await?;
+            let db = database(&chat, &c, a);
+            guard(&s, db.as_deref()).await?;
+            let schema = active_schema(state, &c, a.schema.as_deref());
+            readonly::blocked_schema(schema.as_deref())?;
+            let structure = s.structure(db.as_deref(), schema.as_deref(), table).await?;
             text_output(&structure, None)
         }
         "run_select" => {
@@ -207,12 +219,16 @@ async fn run_tool(state: &AppState, chat_id: &str, name: &str, a: &ToolArgs) -> 
             }
             let sql = a.sql.as_deref().ok_or_else(|| AppError::msg("sql is required"))?;
             readonly::check(sql, s.dialect())?; // refuse writes before bothering the user
+            let db = database(&chat, &c, a);
+            let schema = active_schema(state, &c, a.schema.as_deref());
+            readonly::blocked_schema(schema.as_deref())?; // None for MySQL and SQLite
+            guard(&s, db.as_deref()).await?;
             if c.environment == Environment::Prod
                 && !state.claude.approvals.ask(&state.claude.hub, chat_id, &c.id, &c.name, sql, APPROVAL_TIMEOUT).await
             {
                 return Err(AppError::msg("The user did not allow this query."));
             }
-            let res = readonly::run_select(&s, database(&chat, &c, a).as_deref(), sql).await?;
+            let res = readonly::run_select(&s, db.as_deref(), schema.as_deref(), sql).await?;
             let body = json!({
                 "columns": res.columns.iter().map(|col| col.name.as_str()).collect::<Vec<_>>(),
                 "rows": res.rows, "truncated": res.truncated, "elapsedMs": res.elapsed_ms,
@@ -238,7 +254,36 @@ async fn resolve(state: &AppState, chat: &ChatConfig, a: &ToolArgs) -> AppResult
     Ok((config, session))
 }
 
-/// MySQL: the argument, else the database selected in uDB, else the saved default. SQLite: none.
+/// Refuses a Postgres login that Claude must not use (superuser, server-file roles).
+async fn guard(s: &Session, database: Option<&str>) -> AppResult<()> {
+    match s.ai_refusal(database).await? {
+        Some(why) => Err(AppError::msg(why)),
+        None => Ok(()),
+    }
+}
+
+/// Postgres: the argument, else the schema selected in uDB, else `public`. MySQL and SQLite: none.
+fn active_schema(state: &AppState, c: &ConnectionConfig, asked: Option<&str>) -> Option<String> {
+    match c.engine {
+        Engine::Postgres => Some(
+            asked.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).or_else(|| state.manager.schema(&c.id)).unwrap_or_else(|| "public".into()),
+        ),
+        Engine::Mysql | Engine::Sqlite => None,
+    }
+}
+
+/// The schema a tool call will use, for the card (None when not Postgres or the connection is not in the chat).
+fn tool_schema(state: &AppState, chat_id: &str, a: &ToolArgs) -> Option<String> {
+    let chat = state.claude.chat(chat_id).ok()?;
+    let id = a.connection.as_deref()?;
+    if !chat.connection_ids.iter().any(|c| c == id) {
+        return None;
+    }
+    let config = state.store.connection(id).ok()?;
+    active_schema(state, &config, a.schema.as_deref())
+}
+
+/// MySQL and Postgres: the argument, else the database selected in uDB, else the saved default. SQLite: none.
 fn database(chat: &ChatConfig, c: &ConnectionConfig, a: &ToolArgs) -> Option<String> {
     match c.engine {
         Engine::Mysql | Engine::Postgres => a.database.clone().or_else(|| chat.database_for(&c.id)).or_else(|| c.database.clone()),
@@ -476,5 +521,54 @@ mod tests {
         assert!(out.text.contains(p[4]), "{}", out.text);
         let out = run_tool(&state, &chat, "run_select", &ToolArgs { connection: Some(id), sql: Some("SELECT DATABASE()".into()), ..Default::default() }).await.unwrap();
         assert!(out.text.contains("information_schema"), "{}", out.text);
+    }
+
+    async fn postgres_chat(dir: &std::path::Path, login: Option<(&str, &str)>) -> Option<(Arc<AppState>, String, String)> {
+        let (state, id) = crate::commands::test_support::postgres_state(dir, "dev", login).await?;
+        start(state.clone()).await.unwrap();
+        let chat = state.claude.open_chat(vec![ChatConnection { id: id.clone(), database: None }]);
+        Some((state, id, chat))
+    }
+
+    #[tokio::test]
+    async fn postgres_tools_use_the_schema_and_stay_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((state, id, chat)) = postgres_chat(dir.path(), Some(("reader", "reader_pw"))).await else { return };
+        let args = |sql: Option<&str>, schema: Option<&str>| ToolArgs { connection: Some(id.clone()), sql: sql.map(String::from), schema: schema.map(String::from), ..Default::default() };
+        // no schema selected in uDB: public
+        let out = run_tool(&state, &chat, "run_select", &args(Some("select count(*) from customers"), None)).await.unwrap();
+        assert!(out.text.contains("20"), "{}", out.text);
+        // the schema selected in uDB
+        dispatch(&state, "set_active_schema", json!({ "id": id, "schema": "billing" })).await.unwrap();
+        let out = run_tool(&state, &chat, "run_select", &args(Some("select count(*) from invoices"), None)).await.unwrap();
+        assert!(out.text.contains("20"), "{}", out.text);
+        let tables = run_tool(&state, &chat, "list_tables", &args(None, None)).await.unwrap();
+        assert!(tables.text.contains("invoices") && !tables.text.contains("customers"), "{}", tables.text);
+        // the argument wins
+        let tables = run_tool(&state, &chat, "list_tables", &args(None, Some("public"))).await.unwrap();
+        assert!(tables.text.contains("customers"), "{}", tables.text);
+        let d = run_tool(&state, &chat, "describe_table", &ToolArgs { table: Some("customers".into()), ..args(None, Some("public")) }).await.unwrap();
+        assert!(d.text.contains("email"), "{}", d.text);
+
+        for sql in ["delete from invoices", "select pg_read_file('/etc/passwd')", "copy invoices to stdout"] {
+            assert!(run_tool(&state, &chat, "run_select", &args(Some(sql), None)).await.is_err(), "{sql}");
+        }
+        assert!(run_tool(&state, &chat, "run_select", &args(Some("select 1"), Some("pg_catalog"))).await.is_err());
+        // an `unlocked` field from Claude is not part of the tool input
+        let a: ToolArgs = serde_json::from_value(json!({ "connection": id, "sql": "select 1", "unlocked": true })).unwrap();
+        assert!(run_tool(&state, &chat, "run_select", &a).await.is_ok());
+        // the card names the schema
+        assert_eq!(tool_schema(&state, &chat, &args(None, None)).as_deref(), Some("billing"));
+    }
+
+    #[tokio::test]
+    async fn postgres_tools_refuse_a_superuser_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((state, id, chat)) = postgres_chat(dir.path(), None).await else { return };
+        let a = ToolArgs { connection: Some(id.clone()), sql: Some("select 1".into()), table: Some("customers".into()), ..Default::default() };
+        for tool in ["run_select", "list_tables", "describe_table"] {
+            let err = run_tool(&state, &chat, tool, &a).await.err().unwrap_or_else(|| panic!("{tool} ran as superuser"));
+            assert_eq!(err.to_string(), crate::drivers::postgres::SUPERUSER_MESSAGE, "{tool}");
+        }
     }
 }

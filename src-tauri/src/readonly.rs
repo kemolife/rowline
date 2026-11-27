@@ -529,9 +529,9 @@ pub fn limit_values(result: &mut QueryResult) {
 }
 
 /// Checks, runs and trims one query for Claude.
-pub async fn run_select(session: &crate::manager::Session, database: Option<&str>, sql: &str) -> AppResult<QueryResult> {
+pub async fn run_select(session: &crate::manager::Session, database: Option<&str>, schema: Option<&str>, sql: &str) -> AppResult<QueryResult> {
     let statement = check(sql, session.dialect())?;
-    let mut result = session.select_read_only(database, &statement, MAX_ROWS).await?;
+    let mut result = session.select_read_only(database, schema, &statement, MAX_ROWS).await?;
     limit_values(&mut result);
     result.statement = Some(statement);
     Ok(result)
@@ -564,7 +564,7 @@ mod tests {
     async fn run_select_limits_rows() {
         let dir = tempfile::tempdir().unwrap();
         let s = sqlite_session(dir.path()).await;
-        let res = run_select(&s, None, "SELECT id, body FROM t").await.unwrap();
+        let res = run_select(&s, None, None, "SELECT id, body FROM t").await.unwrap();
         assert_eq!(res.rows.len(), MAX_ROWS);
         assert!(res.truncated);
     }
@@ -573,7 +573,7 @@ mod tests {
     async fn long_values_are_cut() {
         let dir = tempfile::tempdir().unwrap();
         let s = sqlite_session(dir.path()).await;
-        let res = run_select(&s, None, "SELECT body FROM t ORDER BY length(body) DESC LIMIT 1").await.unwrap();
+        let res = run_select(&s, None, None, "SELECT body FROM t ORDER BY length(body) DESC LIMIT 1").await.unwrap();
         let body = res.rows[0][0].as_str().unwrap();
         assert_eq!(body.chars().count(), MAX_VALUE_CHARS + 1);
         assert!(body.ends_with('…'));
@@ -584,11 +584,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = sqlite_session(dir.path()).await;
         // skip the SQL check on purpose: the read-only connection itself must refuse
-        let err = s.select_read_only(None, "DELETE FROM t", 10).await.unwrap_err().to_string();
+        let err = s.select_read_only(None, None, "DELETE FROM t", 10).await.unwrap_err().to_string();
         assert!(err.to_lowercase().contains("readonly") || err.to_lowercase().contains("read-only"), "{err}");
-        let n = s.execute(None, "SELECT count(*) FROM t", 10).await.unwrap();
+        let n = s.execute(None, None, "SELECT count(*) FROM t", 10, false).await.unwrap();
         assert_eq!(n[0].rows[0][0], 251);
-        assert!(run_select(&s, None, "DELETE FROM t").await.unwrap_err().to_string().contains("read-only"));
+        assert!(run_select(&s, None, None, "DELETE FROM t").await.unwrap_err().to_string().contains("read-only"));
     }
 
     #[test]

@@ -81,3 +81,25 @@ pub(crate) fn marking_claude(dir: &std::path::Path) -> (std::path::PathBuf, std:
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     (script, marker)
 }
+
+/// `ROWLINE_TEST_POSTGRES` = host:port:user:password:database (the admin login). None = skip the test.
+pub(crate) fn pg_env() -> Option<Vec<String>> {
+    let v = std::env::var("ROWLINE_TEST_POSTGRES").ok()?;
+    Some(v.splitn(5, ':').map(str::to_string).collect())
+}
+
+/// A saved and connected Postgres connection (Claude access Data). `login` = (user, password), else the admin login.
+pub(crate) async fn postgres_state(dir: &std::path::Path, environment: &str, login: Option<(&str, &str)>) -> Option<(std::sync::Arc<AppState>, String)> {
+    let p = pg_env()?;
+    let (user, password) = login.unwrap_or((&p[2], &p[3]));
+    let state = std::sync::Arc::new(AppState::new(Store::new(dir.join("cfg"), SecretStore::file(dir.join("s.json"))).unwrap()));
+    let saved = dispatch(&state, "save_connection", json!({
+        "id": "", "name": format!("Pg {environment}"), "engine": "postgres", "environment": environment, "claudeAccess": "data",
+        "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": user, "password": password, "database": p[4]
+    }))
+    .await
+    .unwrap();
+    let id = saved["id"].as_str().unwrap().to_string();
+    dispatch(&state, "connect", json!({ "id": id })).await.unwrap();
+    Some((state, id))
+}

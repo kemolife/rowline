@@ -1,7 +1,7 @@
 //! Reading and changing data on a Postgres session.
 
 use super::values::*;
-use super::{Access, PostgresSession, SUPERUSER_MESSAGE, UNLOCK_MESSAGE};
+use super::{Access, PostgresSession, SERVER_FILE_ROLES, SUPERUSER_MESSAGE, UNLOCK_MESSAGE, server_role_message};
 use crate::error::{AppError, AppResult};
 use crate::model::*;
 use crate::sqlgen::{self, Dialect};
@@ -33,6 +33,14 @@ impl PostgresSession {
     pub async fn is_superuser(&self, database: Option<&str>) -> AppResult<bool> {
         let tx = self.begin(database, None, Access::ReadOnly).await?;
         let res = superuser(&tx.c).await;
+        tx.finish(res).await
+    }
+
+    /// Why Claude, MCP and `udb` must not use this login, or None when they may: a superuser (or a member of a
+    /// superuser role), or a member of a role that reads/writes server files or runs server programs.
+    pub async fn ai_refusal(&self, database: Option<&str>) -> AppResult<Option<String>> {
+        let tx = self.begin(database, None, Access::ReadOnly).await?;
+        let res = ai_refusal(&tx.c).await;
         tx.finish(res).await
     }
 
@@ -131,8 +139,8 @@ impl PostgresSession {
         crate::readonly::blocked_schema(schema)?;
         let timeout = crate::readonly::TIMEOUT;
         let tx = self.begin(database, schema, Access::Guarded).await?;
-        if superuser(&tx.c).await? {
-            return tx.finish(Err(AppError::msg(SUPERUSER_MESSAGE))).await;
+        if let Some(refusal) = ai_refusal(&tx.c).await? {
+            return tx.finish(Err(AppError::msg(refusal))).await;
         }
         let token = tx.c.cancel_token();
         let res = match tokio::time::timeout(timeout + Duration::from_secs(2), self.run_tracked(&tx.c, sql, max_rows, true)).await {
@@ -285,6 +293,28 @@ async fn superuser(c: &Client) -> AppResult<bool> {
     let row = c.query_one("SHOW is_superuser", &[]).await?;
     Ok(row.get::<_, String>(0) == "on")
 }
+
+/// The message for a login Claude, MCP and `udb` must not use, checked in the caller's transaction.
+async fn ai_refusal(c: &Client) -> AppResult<Option<String>> {
+    // a member of a superuser role could become it with SET ROLE: treated as a superuser too
+    let row = c
+        .query_one("SELECT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolsuper AND pg_has_role(current_user, r.oid, 'MEMBER'))", &[])
+        .await?;
+    if superuser(c).await? || row.get::<_, bool>(0) {
+        return Ok(Some(SUPERUSER_MESSAGE.to_string()));
+    }
+    for role in SERVER_FILE_ROLES {
+        // the role is missing on very old servers: then nobody is a member
+        let row = c
+            .query_one("SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1::text) THEN pg_has_role(current_user, $1::text, 'MEMBER') ELSE false END", &[role])
+            .await?;
+        if row.get::<_, bool>(0) {
+            return Ok(Some(server_role_message(role)));
+        }
+    }
+    Ok(None)
+}
+
 
 /// Column -> type without modifiers (`numeric`, `character varying`, `integer[]`), for `$n::type` casts.
 /// Without the modifier a too long value is an error instead of being cut by the cast.

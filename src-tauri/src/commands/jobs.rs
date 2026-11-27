@@ -30,6 +30,7 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             let restore = command == "restore_start";
             let database = match &*session {
                 Session::Mysql(_) => Some(a.database.filter(|d| !d.is_empty()).ok_or_else(|| AppError::msg("Select a database first."))?),
+                Session::Postgres(_) => return Err(AppError::msg("Backup is not available for PostgreSQL yet.")),
                 Session::Sqlite(_) => None,
             };
             let label = if restore { "Restoring" } else { "Backing up" };
@@ -39,6 +40,7 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
                     (Session::Mysql(s), true) => crate::drivers::mysql::backup::restore(s, database.as_deref().unwrap_or_default(), &a.path, &job).await,
                     (Session::Sqlite(s), false) => s.backup_to(a.path.clone(), job.clone()).await,
                     (Session::Sqlite(s), true) => s.restore_from(a.path.clone(), job.clone()).await,
+                    (Session::Postgres(_), _) => Err(AppError::msg("Backup is not available for PostgreSQL yet.")),
                 }
             });
             ok(json!({ "jobId": job_id }))

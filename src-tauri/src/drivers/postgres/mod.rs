@@ -34,6 +34,13 @@ pub const UNLOCK_MESSAGE: &str = "This prod connection is read-only. Use \"Unloc
 /// Claude, MCP and `udb` never run with a superuser login.
 pub const SUPERUSER_MESSAGE: &str =
     "Claude and udb don't run as a Postgres superuser. Connect with a role that is not a superuser.";
+/// Built-in roles that give access to the server's files or programs (a READ ONLY transaction does not stop them).
+/// Claude, MCP and `udb` never run with a login that is a member of one.
+pub const SERVER_FILE_ROLES: &[&str] = &["pg_read_server_files", "pg_write_server_files", "pg_execute_server_program"];
+
+pub fn server_role_message(role: &str) -> String {
+    format!("Claude and udb don't run as a member of the Postgres role {role}. Connect with a role that is not a member of it.")
+}
 
 pub struct PostgresParams<'a> {
     pub host: &'a str,
