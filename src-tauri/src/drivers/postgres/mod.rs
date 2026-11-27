@@ -101,8 +101,21 @@ fn local_time_zone() -> Option<String> {
     plain.then_some(tz)
 }
 
+/// `tz` when the server knows that zone, else None. Asked outside a transaction (nothing to roll back).
+async fn usable_time_zone(c: &Client, tz: Option<String>) -> Option<String> {
+    let tz = tz?;
+    c.query_one("SELECT now() AT TIME ZONE $1::text", &[&tz]).await.ok()?;
+    Some(tz)
+}
+
 impl PostgresSession {
     pub async fn connect(p: PostgresParams<'_>) -> AppResult<Self> {
+        Self::connect_with_zone(p, local_time_zone()).await
+    }
+
+    /// `connect` with the zone to show timestamptz in. A zone the server does not know is left out: with it,
+    /// `SET LOCAL TimeZone` would make every query fail.
+    async fn connect_with_zone(p: PostgresParams<'_>, time_zone: Option<String>) -> AppResult<Self> {
         let mut config = Config::new();
         config
             .host(p.host)
@@ -115,12 +128,12 @@ impl PostgresSession {
         if let Some(pw) = p.password {
             config.password(pw);
         }
-        let session = Self {
+        let mut session = Self {
             config,
             tls: tls_connector(p.tls)?,
             default_database: p.database.filter(|d| !d.is_empty()).unwrap_or("postgres").to_string(),
             prod_lock: std::sync::atomic::AtomicBool::new(p.prod_lock),
-            time_zone: local_time_zone(),
+            time_zone: None,
             pools: Mutex::new(HashMap::new()),
             pings: AtomicU64::new(0),
             next_query: AtomicU64::new(1),
@@ -128,7 +141,9 @@ impl PostgresSession {
         };
         // fail fast on wrong credentials / unreachable host
         let c = session.checkout(&session.default_database).await?;
+        let time_zone = usable_time_zone(&c, time_zone).await;
         c.release();
+        session.time_zone = time_zone;
         Ok(session)
     }
 
@@ -229,31 +244,11 @@ impl PostgresSession {
     }
 
     /// Starts the transaction a query runs in: `BEGIN` or `BEGIN READ ONLY`, `search_path` = `"<schema>", public`,
-    /// the local time zone and fixed output formats. Every setting is `SET LOCAL` (PgBouncer transaction mode).
+    /// the local time zone, standard_conforming_strings and fixed output formats. Every setting is `SET LOCAL` (PgBouncer transaction mode).
     pub(super) async fn begin(&self, database: Option<&str>, schema: Option<&str>, access: Access) -> AppResult<Tx<'_>> {
         let c = self.checkout(&self.db(database)).await?;
-        let read_only = access != Access::ReadWrite;
-        let mut sql = String::from(if read_only { "BEGIN READ ONLY" } else { "BEGIN" });
-        if let Some(s) = schema.filter(|s| !s.is_empty()) {
-            sql.push_str(&format!("; SET LOCAL search_path = {}, public", Dialect::Postgres.quote_ident(s)));
-        }
-        if let Some(tz) = &self.time_zone {
-            sql.push_str(&format!("; SET LOCAL TimeZone = '{tz}'"));
-        }
-        sql.push_str("; SET LOCAL bytea_output = 'hex'; SET LOCAL DateStyle = 'ISO, MDY'; SET LOCAL IntervalStyle = 'postgres'");
-        if access == Access::Guarded {
-            sql.push_str(&format!(
-                "; SET LOCAL statement_timeout = {}; SET LOCAL standard_conforming_strings = on",
-                crate::readonly::TIMEOUT.as_millis()
-            ));
-        }
-        if read_only {
-            // takes the first snapshot: from here on the transaction can't be switched to read-write
-            // (`SET transaction_read_only = off` is refused after the first query)
-            sql.push_str("; SELECT 1");
-        }
-        c.batch_execute(&sql).await?;
-        Ok(Tx { c, commit: !read_only })
+        c.batch_execute(&begin_sql(schema, self.time_zone.as_deref(), access)).await?;
+        Ok(Tx { c, commit: access == Access::ReadWrite })
     }
 
     pub async fn close(self) {
@@ -261,12 +256,35 @@ impl PostgresSession {
     }
 }
 
+/// The SQL that starts a transaction (see `PostgresSession::begin`).
+fn begin_sql(schema: Option<&str>, time_zone: Option<&str>, access: Access) -> String {
+    let read_only = access != Access::ReadWrite;
+    let mut sql = String::from(if read_only { "BEGIN READ ONLY" } else { "BEGIN" });
+    if let Some(s) = schema.filter(|s| !s.is_empty()) {
+        sql.push_str(&format!("; SET LOCAL search_path = {}, public", Dialect::Postgres.quote_ident(s)));
+    }
+    if let Some(tz) = time_zone {
+        sql.push_str(&format!("; SET LOCAL TimeZone = '{tz}'"));
+    }
+    // every transaction: '…' strings read as the checker and the splitter read them (no backslash escapes)
+    sql.push_str("; SET LOCAL bytea_output = 'hex'; SET LOCAL DateStyle = 'ISO, MDY'; SET LOCAL IntervalStyle = 'postgres'; SET LOCAL standard_conforming_strings = on");
+    if access == Access::Guarded {
+        sql.push_str(&format!("; SET LOCAL statement_timeout = {}", crate::readonly::TIMEOUT.as_millis()));
+    }
+    if read_only {
+        // takes the first snapshot: from here on the transaction can't be switched to read-write
+        // (`SET transaction_read_only = off` is refused after the first query)
+        sql.push_str("; SELECT 1");
+    }
+    sql
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Access {
     ReadWrite,
     /// Server-side READ ONLY transaction, rolled back at the end
     ReadOnly,
-    /// Claude, MCP, `udb`: READ ONLY plus statement_timeout and standard_conforming_strings
+    /// Claude, MCP, `udb`: READ ONLY plus statement_timeout
     Guarded,
 }
 
@@ -451,6 +469,31 @@ mod tests {
         s.pretend_idle_since(SystemTime::now() - IDLE_POOL_CLOSE - Duration::from_secs(1));
         s.execute(None, None, "SELECT 1", 1, false).await.unwrap();
         assert!(!lock(&s.pools).contains_key("postgres"));
+    }
+
+    #[tokio::test]
+    async fn a_time_zone_the_server_does_not_know_is_not_set() {
+        let Some(p) = params() else { return };
+        // with `SET LOCAL TimeZone = '<unknown>'` in begin() every query failed (22023)
+        let s = PostgresSession::connect_with_zone(p.as_params(false), Some("Mars/Olympus_Mons".into())).await.unwrap();
+        assert_eq!(s.time_zone, None);
+        assert_eq!(s.execute(None, None, "SELECT 1", 1, false).await.unwrap()[0].rows[0][0], 1);
+        let s = PostgresSession::connect_with_zone(p.as_params(false), Some("America/New_York".into())).await.unwrap();
+        assert_eq!(s.time_zone.as_deref(), Some("America/New_York"));
+        let r = s.execute(None, None, "SHOW TimeZone", 1, false).await.unwrap();
+        assert_eq!(r[0].rows[0][0], "America/New_York");
+    }
+
+    #[test]
+    fn every_transaction_has_standard_conforming_strings() {
+        // the checker and the splitter read '…' with backslash escapes off: the server must too
+        for access in [Access::ReadWrite, Access::ReadOnly, Access::Guarded] {
+            let sql = begin_sql(Some("billing"), Some("UTC"), access);
+            assert!(sql.contains("SET LOCAL standard_conforming_strings = on"), "{access:?}: {sql}");
+        }
+        assert!(begin_sql(None, None, Access::Guarded).contains("statement_timeout"));
+        assert!(!begin_sql(None, None, Access::ReadWrite).contains("statement_timeout"));
+        assert!(begin_sql(None, None, Access::ReadOnly).starts_with("BEGIN READ ONLY"));
     }
 
     #[test]

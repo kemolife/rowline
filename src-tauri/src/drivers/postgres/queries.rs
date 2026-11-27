@@ -49,7 +49,8 @@ impl PostgresSession {
     pub async fn select_page(&self, req: PageRequest, unlocked: bool) -> AppResult<QueryResult> {
         let locked = self.locked(unlocked);
         let sql = sqlgen::select_page_sql(Dialect::Postgres, &req);
-        let tx = self.begin(req.database.as_deref(), req.schema.as_deref(), access(locked)).await?;
+        // a page only reads: READ ONLY even on an unlocked tab (a grid filter can't write)
+        let tx = self.begin(req.database.as_deref(), req.schema.as_deref(), Access::ReadOnly).await?;
         // the query asks for one row more than the page: no need to stop the server for that row
         let res = self.run_tracked(&tx.c, &sql, req.limit as usize, false).await.map_err(|e| lock_error(e, locked));
         let mut res = tx.finish(res).await?;
@@ -60,7 +61,7 @@ impl PostgresSession {
     pub async fn count(&self, req: PageRequest, unlocked: bool) -> AppResult<u64> {
         let locked = self.locked(unlocked);
         let sql = sqlgen::count_sql(Dialect::Postgres, &req);
-        let tx = self.begin(req.database.as_deref(), req.schema.as_deref(), access(locked)).await?;
+        let tx = self.begin(req.database.as_deref(), req.schema.as_deref(), Access::ReadOnly).await?;
         // tracked, so Cancel stops a slow count on a big table too
         let res = self
             .tracked(tx.c.cancel_token(), tx.c.query_one(sql.as_str(), &[]))
@@ -653,6 +654,16 @@ mod tests {
         let err = still_read_only(&tx.c, &marker).await.unwrap_err().to_string();
         assert!(err.contains("read-only transaction"), "{err}");
         let _ = tx.finish(Ok(())).await;
+    }
+
+    #[tokio::test]
+    async fn pages_and_counts_always_run_read_only() {
+        let read_only = || PageRequest { filter: Some("current_setting('transaction_read_only') = 'on'".into()), ..page(None, "customers") };
+        for (prod, unlocked) in [(false, false), (true, true)] {
+            let Some(s) = session(prod).await else { return };
+            assert_eq!(s.count(read_only(), unlocked).await.unwrap(), 20, "prod {prod}, unlocked {unlocked}");
+            assert_eq!(s.select_page(read_only(), unlocked).await.unwrap().rows.len(), 20, "prod {prod}, unlocked {unlocked}");
+        }
     }
 
     #[tokio::test]
