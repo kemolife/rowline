@@ -2,6 +2,7 @@ import { Plus, X } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import { effectiveClaudeAccess, type ConnectionConfig } from '../lib/types';
 import { useDismiss } from '../lib/useDismiss';
+import { isServer } from '../lib/engine';
 import { envColor } from '../lib/ui';
 import { useApp } from '../store/app';
 import { useChat } from '../store/chat';
@@ -14,7 +15,7 @@ function Chip({ id, onRemove }: { id: string; onRemove?: () => void }) {
   const saved = useApp((s) => s.connections.find((c) => c.id === id));
   if (!w) return null;
   const c = saved ?? w.session.config;
-  const db = c.engine === 'mysql' ? w.session.database : null;
+  const db = isServer(c.engine) ? w.session.database : null;
   return (
     <span className="flex h-6 max-w-[220px] items-center gap-1 rounded-full px-2 text-[11.5px]" style={{ background: `color-mix(in srgb, ${envColor(c.environment)} 14%, transparent)`, color: envColor(c.environment) }}>
       <span className="truncate">@ {c.name}{db ? ` · ${db}` : ''}</span>

@@ -1,6 +1,7 @@
 import ELK from 'elkjs/lib/elk-api.js';
 import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
 import { changeLines, type TableView } from './schemaDiff';
+import { engineLabel } from './engine';
 import type { Engine } from './types';
 
 /** Size of a table box on the diagram */
@@ -234,14 +235,17 @@ const describeColumn = (c: TableView['columns'][number], fk: string | undefined)
 export function diagramPrompt(opts: {
   question: string;
   database: string | null;
+  /** Postgres schema of the diagram */
+  schema?: string | null;
   engine: Engine;
   tables: TableView[];
   relations: Relation[];
   changesSince: string | null;
   projectFolder: string | null;
 }): string {
-  const { question, database, engine, tables, relations, changesSince, projectFolder } = opts;
-  const lines: string[] = [question.trim(), '', `Context from the relation diagram of ${database ? `\`${database}\`` : 'the database'} (${engine === 'mysql' ? 'MySQL' : 'SQLite'}):`, '', 'Tables:'];
+  const { question, database, schema, engine, tables, relations, changesSince, projectFolder } = opts;
+  const where = `${database ? `\`${database}\`` : 'the database'}${schema ? `, schema \`${schema}\`` : ''}`;
+  const lines: string[] = [question.trim(), '', `Context from the relation diagram of ${where} (${engineLabel(engine)}):`, '', 'Tables:'];
   for (const t of tables) {
     const fkOf = new Map<string, string>();
     for (const f of t.foreignKeys) f.columns.forEach((c, i) => fkOf.set(c, `${f.refTable}.${f.refColumns[i] ?? '?'}`));

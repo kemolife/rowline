@@ -10,3 +10,11 @@ services:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
     ports: ["127.0.0.1:13306:3306"]
     volumes: ["./init:/docker-entrypoint-initdb.d:ro"]
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: shop
+    ports: ["127.0.0.1:15432:5432"]
+    volumes: ["./init-postgres:/docker-entrypoint-initdb.d:ro"]

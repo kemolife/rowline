@@ -1,4 +1,5 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import { quoteIdent } from './engine';
 import type { Engine } from './types';
 
 export interface FilterColumn {
@@ -11,14 +12,17 @@ const KEYWORDS = ['AND', 'OR', 'NOT', 'IS NULL', 'IS NOT NULL', 'LIKE', 'NOT LIK
 const FUNCTIONS: Record<Engine, string[]> = {
   mysql: ['NOW()', 'CURDATE()', 'DATE()', 'LOWER()', 'UPPER()', 'LENGTH()', 'COALESCE()', 'IFNULL()', 'CONCAT()', 'FIND_IN_SET()', 'JSON_EXTRACT()', 'DATE_SUB()', 'INTERVAL'],
   sqlite: ["datetime('now')", "date('now')", 'date()', 'lower()', 'upper()', 'length()', 'coalesce()', 'ifnull()', 'instr()', 'json_extract()'],
+  postgres: ['now()', 'current_date', 'lower()', 'upper()', 'length()', 'coalesce()', 'concat()', 'date_trunc()', "interval '1 day'"],
 };
 
 const RESERVED = new Set(['and', 'or', 'not', 'is', 'null', 'like', 'in', 'between', 'order', 'group', 'select', 'from', 'where', 'key', 'index', 'table', 'limit', 'desc', 'asc', 'by']);
 
 /** Column name as it should be typed in the filter: plain when safe, quoted otherwise. */
 export function columnIdent(name: string, engine: Engine): string {
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name.toLowerCase())) return name;
-  return engine === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : `"${name.replace(/"/g, '""')}"`;
+  // Postgres folds unquoted names to lower case, so `ClientId` must be quoted there
+  const plain = engine === 'postgres' ? /^[a-z_][a-z0-9_]*$/ : /^[A-Za-z_][A-Za-z0-9_]*$/;
+  if (plain.test(name) && !RESERVED.has(name.toLowerCase())) return name;
+  return quoteIdent(engine, name);
 }
 
 /** Completion items for the WHERE filter: columns first, then operators and functions. */

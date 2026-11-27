@@ -25,6 +25,8 @@ pub struct Request {
     pub cmd: String,
     pub conn: Option<String>,
     pub db: Option<String>,
+    /// Postgres schema (`--schema`)
+    pub schema: Option<String>,
     pub table: Option<String>,
     pub sql: Option<String>,
     pub limit: Option<usize>,
@@ -87,8 +89,7 @@ async fn serve(state: &AppState, stream: UnixStream) -> std::io::Result<()> {
 pub async fn handle(state: &AppState, req: Request) -> Value {
     let res = match req.cmd.as_str() {
         "connections" => connections(state).await,
-        "tables" => tables(state, &req).await,
-        "describe" => describe(state, &req).await,
+        "tables" | "describe" => return schema_command(state, &req).await,
         "query" => return query(state, &req).await,
         other => Err(AppError::msg(format!("Unknown command: {other}"))),
     };
@@ -110,10 +111,25 @@ async fn open_connections(state: &AppState) -> Vec<ConnectionConfig> {
     list
 }
 
-/// MySQL: --db, else the database selected in the app, else the saved default. SQLite: none.
+/// Postgres: --schema, else the schema selected in the app, else `public`. MySQL and SQLite: none.
+fn schema(state: &AppState, c: &ConnectionConfig, asked: Option<&str>) -> Option<String> {
+    match c.engine {
+        Engine::Postgres => Some(
+            asked.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).or_else(|| state.manager.schema(&c.id)).unwrap_or_else(|| "public".into()),
+        ),
+        Engine::Mysql | Engine::Sqlite => None,
+    }
+}
+
+/// A Postgres login `udb` must not use (superuser, server-file roles): a refusal, exit code 2.
+async fn refusal(s: &Session, database: Option<&str>) -> AppResult<Option<AppError>> {
+    Ok(s.ai_refusal(database).await?.map(AppError::msg))
+}
+
+/// MySQL and Postgres: --db, else the database selected in the app, else the saved default. SQLite: none.
 fn database(state: &AppState, c: &ConnectionConfig, asked: Option<&str>) -> Option<String> {
     match c.engine {
-        Engine::Mysql => asked.map(str::to_string).or_else(|| state.manager.database(&c.id)).or_else(|| c.database.clone()),
+        Engine::Mysql | Engine::Postgres => asked.map(str::to_string).or_else(|| state.manager.database(&c.id)).or_else(|| c.database.clone()),
         Engine::Sqlite => None,
     }
 }
@@ -122,7 +138,7 @@ async fn connections(state: &AppState) -> AppResult<Value> {
     let list: Vec<Value> = open_connections(state)
         .await
         .iter()
-        .map(|c| json!({ "name": c.name, "environment": c.environment, "engine": c.engine, "database": database(state, c, None), "access": c.claude_access() }))
+        .map(|c| json!({ "name": c.name, "environment": c.environment, "engine": c.engine, "database": database(state, c, None), "schema": schema(state, c, None), "access": c.claude_access() }))
         .collect();
     Ok(Value::Array(list))
 }
@@ -163,15 +179,34 @@ async fn resolve(state: &AppState, req: &Request) -> AppResult<(ConnectionConfig
     Ok((c, session))
 }
 
-async fn tables(state: &AppState, req: &Request) -> AppResult<Value> {
-    let (c, s) = resolve(state, req).await?;
-    Ok(serde_json::to_value(s.objects(database(state, &c, req.db.as_deref()).as_deref()).await?)?)
-}
-
-async fn describe(state: &AppState, req: &Request) -> AppResult<Value> {
-    let (c, s) = resolve(state, req).await?;
-    let table = req.table.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| AppError::msg("Name the table: udb describe <table>"))?;
-    Ok(serde_json::to_value(s.structure(database(state, &c, req.db.as_deref()).as_deref(), table).await?)?)
+/// `tables` and `describe`
+async fn schema_command(state: &AppState, req: &Request) -> Value {
+    let (c, s) = match resolve(state, req).await {
+        Ok(v) => v,
+        Err(e) => return failed(e),
+    };
+    let db = database(state, &c, req.db.as_deref());
+    match refusal(&s, db.as_deref()).await {
+        Ok(Some(e)) => return blocked(e),
+        Ok(None) => {}
+        Err(e) => return failed(e),
+    }
+    let schema = schema(state, &c, req.schema.as_deref());
+    if let Err(e) = readonly::blocked_schema(schema.as_deref()) {
+        return blocked(e);
+    }
+    let res = async {
+        if req.cmd == "tables" {
+            return Ok(serde_json::to_value(s.objects(db.as_deref(), schema.as_deref()).await?)?);
+        }
+        let table = req.table.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| AppError::msg("Name the table: udb describe <table>"))?;
+        Ok::<_, AppError>(serde_json::to_value(s.structure(db.as_deref(), schema.as_deref(), table).await?)?)
+    }
+    .await;
+    match res {
+        Ok(data) => json!({ "ok": true, "data": data }),
+        Err(e) => failed(e),
+    }
 }
 
 async fn query(state: &AppState, req: &Request) -> Value {
@@ -180,6 +215,7 @@ async fn query(state: &AppState, req: &Request) -> Value {
         Err(e) => return failed(e),
     };
     let db = database(state, &c, req.db.as_deref());
+    let schema = schema(state, &c, req.schema.as_deref());
     let sql = req.sql.as_deref().unwrap_or("").to_string();
     let access = c.claude_access();
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -214,12 +250,30 @@ async fn query(state: &AppState, req: &Request) -> Value {
             return blocked(e);
         }
     };
-    match s.select_read_only(db.as_deref(), &statement, limit).await {
+    // Postgres: no system schemas, no superuser or server-file roles
+    let refused = match c.engine {
+        Engine::Postgres => match readonly::blocked_schema(schema.as_deref()) {
+            Err(e) => Some(e),
+            Ok(()) => match refusal(&s, db.as_deref()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    log(false, Some(e.to_string()), None);
+                    return failed(e);
+                }
+            },
+        },
+        Engine::Mysql | Engine::Sqlite => None,
+    };
+    if let Some(e) = refused {
+        log(false, Some(format!("Blocked: {e}")), None);
+        return blocked(e);
+    }
+    match s.select_read_only(db.as_deref(), schema.as_deref(), &statement, limit).await {
         Ok(mut res) => {
             readonly::limit_values(&mut res);
             log(true, None, Some(res.rows.len()));
             json!({ "ok": true, "data": {
-                "connection": c.name, "database": db,
+                "connection": c.name, "database": db, "schema": schema,
                 "columns": res.columns.iter().map(|col| col.name.as_str()).collect::<Vec<_>>(),
                 "rows": res.rows, "rowCount": res.rows.len(), "truncated": res.truncated, "elapsedMs": res.elapsed_ms,
             } })
@@ -227,7 +281,14 @@ async fn query(state: &AppState, req: &Request) -> Value {
         Err(e) => {
             // the database refused a write the check let through: still "not allowed"
             let msg = e.to_string();
-            let refused = msg.contains("READ ONLY") || msg.contains("1792") || msg.to_lowercase().contains("readonly");
+            let lower = msg.to_lowercase();
+            // MySQL 1792 / READ ONLY, SQLite readonly, Postgres 25006 (read-only transaction) and the driver's own refusals
+            let refused = msg.contains("READ ONLY")
+                || msg.contains("1792")
+                || lower.contains("readonly")
+                || msg.contains("ERROR 25006")
+                || msg == crate::drivers::postgres::SUPERUSER_MESSAGE
+                || crate::drivers::postgres::SERVER_FILE_ROLES.iter().any(|r| msg == crate::drivers::postgres::server_role_message(r));
             log(false, Some(msg), None);
             if refused { blocked(e) } else { failed(e) }
         }
@@ -427,5 +488,68 @@ mod tests {
         assert_eq!(w["blocked"], true, "{w}");
         let gone = handle(&state, Request { sql: Some("SHOW TABLES LIKE 'rowline_cli_nope'".into()), ..req("query") }).await;
         assert_eq!(gone["data"]["rowCount"], 0);
+    }
+
+    #[tokio::test]
+    async fn postgres_uses_the_active_schema_as_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((state, id)) = crate::commands::test_support::postgres_state(dir.path(), "prod", Some(("reader", "reader_pw"))).await else { return };
+        dispatch(&state, "set_active_schema", json!({ "id": id, "schema": "billing" })).await.unwrap();
+        let r = handle(&state, Request { sql: Some("select count(*) as n from invoices".into()), ..req("query") }).await;
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["data"]["rows"][0][0], 20);
+        assert_eq!(r["data"]["schema"], "billing");
+        // --schema wins; public tables stay reachable through search_path "<schema>", public
+        let r = handle(&state, Request { sql: Some("select current_schema()".into()), schema: Some("public".into()), ..req("query") }).await;
+        assert_eq!(r["data"]["rows"][0][0], "public", "{r}");
+        let c = handle(&state, req("connections")).await;
+        assert_eq!(c["data"][0]["schema"], "billing", "{c}");
+        let t = handle(&state, req("tables")).await;
+        assert!(t["data"].to_string().contains("invoices"), "{t}");
+        let d = handle(&state, Request { table: Some("customers".into()), schema: Some("public".into()), ..req("describe") }).await;
+        assert!(d["data"].to_string().contains("email"), "{d}");
+
+        // writes: refused by the checker, nothing reaches the server
+        for sql in ["delete from invoices", "select 1; delete from invoices", "create temp table x (id int)", "select pg_sleep(1)"] {
+            let w = handle(&state, Request { sql: Some(sql.into()), ..req("query") }).await;
+            assert_eq!(w["blocked"], true, "{sql}: {w}");
+        }
+        // system schemas are not for AI reads
+        let s = handle(&state, Request { sql: Some("select 1".into()), schema: Some("pg_catalog".into()), ..req("query") }).await;
+        assert_eq!(s["blocked"], true, "{s}");
+        // a request can't unlock writes: the field does not exist and is ignored
+        let raw: Request = serde_json::from_str(r#"{"cmd":"query","sql":"select 1","unlocked":true}"#).unwrap();
+        assert_eq!(handle(&state, raw).await["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn postgres_refuses_a_superuser_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((state, _)) = crate::commands::test_support::postgres_state(dir.path(), "dev", None).await else { return };
+        for r in [Request { sql: Some("select 1".into()), ..req("query") }, req("tables"), Request { table: Some("customers".into()), ..req("describe") }] {
+            let out = handle(&state, r).await;
+            assert_eq!(out["blocked"], true, "{out}");
+            assert_eq!(out["error"], crate::drivers::postgres::SUPERUSER_MESSAGE);
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_refuses_a_login_with_server_file_roles() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((admin, admin_id)) = crate::commands::test_support::postgres_state(dir.path(), "dev", None).await else { return };
+        let setup = "DO $$ BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rowline_files_t5') THEN
+                CREATE ROLE rowline_files_t5 LOGIN PASSWORD 'files_pw_t5';
+              END IF;
+            END $$;
+            GRANT pg_read_server_files TO rowline_files_t5;
+            GRANT USAGE ON SCHEMA public TO rowline_files_t5;
+            GRANT SELECT ON public.customers TO rowline_files_t5";
+        dispatch(&admin, "execute_sql", json!({ "id": admin_id, "sql": setup })).await.unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        let (state, _) = crate::commands::test_support::postgres_state(dir2.path(), "dev", Some(("rowline_files_t5", "files_pw_t5"))).await.unwrap();
+        let out = handle(&state, Request { sql: Some("select count(*) from customers".into()), ..req("query") }).await;
+        assert_eq!(out["blocked"], true, "{out}");
+        assert!(out["error"].as_str().unwrap().contains("pg_read_server_files"), "{out}");
     }
 }

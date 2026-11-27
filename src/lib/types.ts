@@ -1,5 +1,5 @@
 // Mirrors src-tauri/src/model.rs
-export type Engine = 'mysql' | 'sqlite';
+export type Engine = 'mysql' | 'sqlite' | 'postgres';
 export type Environment = 'local' | 'dev' | 'staging' | 'prod';
 export type TlsMode = 'off' | 'required' | 'verify';
 export type ClaudeAccess = 'data' | 'schema' | 'off';
@@ -92,6 +92,8 @@ export interface SortSpec {
 
 export interface PageRequest {
   database?: string | null;
+  /** Postgres schema of the table; null/missing = the server default (`public`). MySQL and SQLite ignore it. */
+  schema?: string | null;
   table: string;
   filter?: string | null;
   sort: SortSpec[];
@@ -186,7 +188,7 @@ export type ChatEvent = { seq: number } & (
   | { kind: 'text_delta'; text: string }
   | { kind: 'text'; text: string }
   | { kind: 'activity'; label: string }
-  | { kind: 'tool_call'; callId: string; tool: string; connection: string | null; database: string | null; sql: string | null }
+  | { kind: 'tool_call'; callId: string; tool: string; connection: string | null; database: string | null; schema?: string | null; sql: string | null }
   | { kind: 'tool_result'; callId: string; rows: number | null; truncated: boolean; elapsedMs: number | null; error: string | null }
   | { kind: 'approval'; requestId: string; connection: string; connectionName: string; sql: string }
   | { kind: 'approval_answered'; requestId: string; allowed: boolean }

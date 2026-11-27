@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, Code2, Filter, Plus, X } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { FilterColumn } from '../lib/filterComplete';
-import { FILTER_OPS, NO_VALUE_OPS, RAW_SQL, enumValues, newRule, ruleLabel, type FilterOp, type FilterRule } from '../lib/filters';
+import { FILTER_OPS, NO_VALUE_OPS, RAW_SQL, enumValues, newRule, quoteIdent, ruleLabel, type FilterOp, type FilterRule } from '../lib/filters';
 import ColumnPicker from './ColumnPicker';
 import { loadFilterUsage, rankColumns, rankOps, recordFilterUse, type FilterUsage } from '../lib/filterUsage';
 import type { Engine, SortSpec } from '../lib/types';
@@ -76,7 +76,7 @@ const FilterBar = forwardRef<FilterBarHandle, Props>(function FilterBar(props, r
     },
   }));
 
-  const quoteName = (s: string) => (engine === 'mysql' ? `\`${s}\`` : `"${s}"`);
+  const quoteName = (s: string) => quoteIdent(engine, s);
   const sortSpec = sort[0];
 
   return (

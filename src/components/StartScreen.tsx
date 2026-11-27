@@ -1,6 +1,7 @@
 import { installCli } from '../lib/cliInstall';
 import { ArrowLeft, ChevronRight, Database, FolderInput, Loader2, MoreHorizontal, Pencil, Plus, Search, ShieldAlert, Trash2, Terminal } from 'lucide-react';
 import { tlsWarning } from '../lib/tls';
+import { defaultPort, engineLabel } from '../lib/engine';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import AppearanceSwitches from './Appearance';
@@ -11,7 +12,14 @@ import type { ConnectionConfig } from '../lib/types';
 import { ENV_LABEL, MOD, cx, envColor } from '../lib/ui';
 import { useApp, useProjects } from '../store/app';
 
+const ENGINE_BADGE: Record<ConnectionConfig['engine'], { color: string; text: string }> = {
+  mysql: { color: '#3b72c4', text: 'My' },
+  postgres: { color: 'var(--engine-pg)', text: 'Pg' },
+  sqlite: { color: '#3f8a5c', text: 'Lite' },
+};
+
 export function EngineBadge({ engine, size = 36 }: { engine: ConnectionConfig['engine']; size?: number }) {
+  const badge = ENGINE_BADGE[engine];
   return (
     <div
       className="flex shrink-0 items-center justify-center rounded-[10px] font-semibold"
@@ -19,12 +27,12 @@ export function EngineBadge({ engine, size = 36 }: { engine: ConnectionConfig['e
         width: size,
         height: size,
         fontSize: size * 0.33,
-        background: engine === 'mysql' ? 'color-mix(in srgb, #3b72c4 14%, transparent)' : 'color-mix(in srgb, #3f8a5c 14%, transparent)',
-        color: engine === 'mysql' ? '#3b72c4' : '#3f8a5c',
+        background: `color-mix(in srgb, ${badge.color} 14%, transparent)`,
+        color: badge.color,
       }}
-      aria-label={engine === 'mysql' ? 'MySQL' : 'SQLite'}
+      aria-label={engineLabel(engine)}
     >
-      {engine === 'mysql' ? 'My' : 'Lite'}
+      {badge.text}
     </div>
   );
 }
@@ -46,7 +54,7 @@ export function EnvTag({ env }: { env: ConnectionConfig['environment'] }) {
 
 export function connectionSubtitle(c: ConnectionConfig): string {
   if (c.engine === 'sqlite') return c.filePath || 'No file';
-  const host = `${c.host || '127.0.0.1'}:${c.port || 3306}`;
+  const host = `${c.host || '127.0.0.1'}:${c.port || defaultPort(c.engine)}`;
   return [c.user ? `${c.user}@${host}` : host, c.database].filter(Boolean).join(' / ');
 }
 
@@ -57,7 +65,7 @@ function connectionParts(c: ConnectionConfig): { main: string; rest: string[] } 
     const file = path.split('/').pop() ?? path;
     return { main: file, rest: [path.slice(0, Math.max(0, path.length - file.length - 1)) || '/'] };
   }
-  return { main: `${c.host || '127.0.0.1'}:${c.port || 3306}`, rest: [c.user ?? '', c.database ?? ''].filter(Boolean) };
+  return { main: `${c.host || '127.0.0.1'}:${c.port || defaultPort(c.engine)}`, rest: [c.user ?? '', c.database ?? ''].filter(Boolean) };
 }
 
 export default function StartScreen({ embedded = false }: { embedded?: boolean }) {
@@ -187,7 +195,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
                 <Database size={20} />
               </div>
               <div className="text-[15px] font-medium">No connections yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-ink-2">Add a MySQL server or open a SQLite file. Passwords stay on this Mac, in a file only your user can read.</p>
+              <p className="mx-auto mt-1 max-w-sm text-ink-2">Add a MySQL or PostgreSQL server, or open a SQLite file. Passwords stay on this Mac, in a file only your user can read.</p>
               <button className="btn btn-primary mt-5 h-9 px-4" onClick={newConnection}>
                 <Plus size={15} /> New connection
               </button>
@@ -217,7 +225,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
         </div>
       </div>
       <div className="flex h-10 shrink-0 items-center justify-between border-t border-line px-4 text-[11.5px] text-ink-3">
-        <span>MySQL · SQLite</span>
+        <span>MySQL · PostgreSQL · SQLite</span>
         <div className="flex-1" />
         <button className="btn btn-ghost h-7" onClick={installCli} title="Put the udb command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line

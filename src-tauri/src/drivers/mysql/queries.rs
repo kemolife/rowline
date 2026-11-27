@@ -28,7 +28,7 @@ impl MysqlSession {
 
     /// Most common values of a column (filter suggestions)
     pub async fn common_values(&self, database: Option<&str>, table: &str, column: &str, limit: usize) -> AppResult<Vec<serde_json::Value>> {
-        let sql = sqlgen::common_values_sql(Dialect::Mysql, self.db(database), table, column, limit);
+        let sql = sqlgen::common_values_sql(Dialect::Mysql, self.db(database), None, table, column, limit);
         let mut c = self.conn().await?;
         let res = self.run_tracked(&mut c, &sql, limit).await?;
         Ok(res.rows.into_iter().filter_map(|r| r.into_iter().next()).collect())
@@ -103,7 +103,7 @@ impl MysqlSession {
 
     pub async fn apply_changes(&self, database: Option<&str>, table: &str, changes: ChangeSet) -> AppResult<u64> {
         let db = self.db(database).map(str::to_string);
-        let statements = sqlgen::change_set_statements(Dialect::Mysql, db.as_deref(), table, &changes)?;
+        let statements = sqlgen::change_set_statements(Dialect::Mysql, db.as_deref(), None, table, &changes, &Default::default())?;
         let mut c = self.conn().await?;
         let mut tx = c.start_transaction(Default::default()).await?;
         let mut total = 0u64;
@@ -283,7 +283,7 @@ mod tests {
         assert!(st.indexes.iter().any(|i| i.name == "idx_name" && !i.unique));
         assert!(st.ddl.unwrap().contains("CREATE TABLE"));
 
-        let req = PageRequest { database: None, table: t.into(), filter: None, sort: vec![SortSpec { column: "id".into(), descending: false }], limit: 1, offset: 0 };
+        let req = PageRequest { database: None, schema: None, table: t.into(), filter: None, sort: vec![SortSpec { column: "id".into(), descending: false }], limit: 1, offset: 0 };
         let page = s.select_page(req.clone()).await.unwrap();
         assert!(page.truncated);
         let r = &page.rows[0];
@@ -384,7 +384,7 @@ mod tests {
         let t = "rowline_test_slow_count";
         s.execute(Some(&db), &format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id INT PRIMARY KEY); INSERT INTO {t} VALUES (1)"), 1).await.unwrap();
         // without a filter the count is quick and exact
-        let req = |filter: Option<&str>| PageRequest { database: Some(db.clone()), table: t.into(), filter: filter.map(str::to_string), sort: vec![], limit: 1, offset: 0 };
+        let req = |filter: Option<&str>| PageRequest { database: Some(db.clone()), schema: None, table: t.into(), filter: filter.map(str::to_string), sort: vec![], limit: 1, offset: 0 };
         assert_eq!(s.count(req(None)).await.unwrap(), 1);
 
         let s = std::sync::Arc::new(s);

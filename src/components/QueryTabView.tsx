@@ -1,4 +1,4 @@
-import { MySQL, SQLite, sql as sqlLang } from '@codemirror/lang-sql';
+import { sql as sqlLang } from '@codemirror/lang-sql';
 import { Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -6,8 +6,10 @@ import { ChevronDown, FileDown, History as HistoryIcon, Play, PlayCircle, Save, 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format as formatSql } from 'sql-formatter';
 import { api, confirmDialog, pickSavePath } from '../lib/api';
+import { codeMirrorDialect } from '../lib/cmDialect';
+import { isServer, prodLocked, sqlDialectName } from '../lib/engine';
 import { setStatements, statementGutter, statementsField, toEditorStatements } from '../lib/statementGutter';
-import { lintStatement, updatesAllRows } from '../lib/sqlAssist';
+import { lintStatement, searchPathTables, updatesAllRows } from '../lib/sqlAssist';
 import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
 import { acceptCompletion, autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete';
 import { completeSql, loadUsage, opensNextSuggestions, recordUse, type SuggestionKind } from '../lib/sqlComplete';
@@ -15,12 +17,13 @@ import { useRelations } from '../store/schema';
 import type { HistoryEntry } from '../lib/types';
 import { MOD, cx, matchKey } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
-import { useApp, type QueryTab } from '../store/app';
+import { queryTabUnlocked, useApp, type QueryTab } from '../store/app';
 import { useChat } from '../store/chat';
 import { useQueries } from '../store/queries';
 import { useWs, useWsActions } from '../store/workspace';
 import ResultPanel, { MAX_RUNS, type Run } from './ResultPanel';
 import SaveQueryDialog from './SaveQueryDialog';
+import WriteLock from './WriteLock';
 
 /** Rows fetched per statement; the database still runs the whole query */
 const ROW_LIMITS: { value: number; label: string }[] = [
@@ -35,11 +38,18 @@ let runSeq = 0;
 
 export default function QueryTabView({ tab, active }: { tab: QueryTab; active: boolean }) {
   const session = useWs((w) => w.session);
-  const { updateTab, refreshObjects } = useWsActions();
+  const { updateTab, refreshObjects, unlockWrites } = useWsActions();
   const toast = useApp((s) => s.toast);
   const themeMode = useApp((s) => s.theme);
   const id = session.connectionId;
-  const database = session.config.engine === 'mysql' ? session.database : null;
+  const engine = session.config.engine;
+  const database = isServer(engine) ? session.database : null;
+  // Postgres: plain table names find the sidebar schema first (search_path), then `public`
+  const pgSchema = engine === 'postgres' ? session.schema : null;
+  // prod Postgres: the editor runs read-only until this tab unlocks writes
+  // the unlock holds only for the database and schema it was given for (the editor follows the picker)
+  const unlocked = queryTabUnlocked(tab, session);
+  const locked = prodLocked(session.config) && !unlocked;
 
   const [sql, setSql] = useState(tab.sql);
   const [running, setRunning] = useState(false);
@@ -52,7 +62,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   useDismiss(runMenuRef, closeRunMenu, runMenu);
   const maxRows = tab.maxRows ?? 5000;
   // relations for JOIN completion: read once the tab is opened (cached per database)
-  const relations = useRelations(id, database, active);
+  const relations = useRelations(id, database, active, pgSchema);
   const assist = useRef({ relations, schema: new Map<string, Set<string>>(), columns: new Map<string, string[]>() });
   assist.current.relations = relations;
   const [editorHeight, setEditorHeight] = useState(45); // percent
@@ -73,9 +83,9 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   useEffect(() => {
     api
       .schemaColumns(id, database)
-      .then(setSchema)
+      .then((cols) => setSchema(searchPathTables(cols, pgSchema)))
       .catch(() => setSchema({}));
-  }, [id, database]);
+  }, [id, database, pgSchema]);
   // table → columns (lower case) for the warnings
   useEffect(() => {
     assist.current.schema = new Map(Object.entries(schema).map(([t, cols]) => [t.toLowerCase(), new Set(cols.map((c) => c.toLowerCase()))]));
@@ -96,16 +106,18 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
     async (text: string) => {
       if (running || !text.trim()) return;
       // UPDATE / DELETE without WHERE: changes every row, ask first
-      const allRows = (await api.splitStatements(text)).map((p) => p.text).filter(updatesAllRows);
+      const allRows = (await api.splitStatements(text, engine)).map((p) => p.text).filter(updatesAllRows);
       if (allRows.length && !(await confirmDialog(`This changes EVERY row (no WHERE):\n\n${allRows.map((t) => t.slice(0, 200)).join('\n\n')}\n\nRun it?`, { title: 'No WHERE', danger: true }))) return;
-      if (session.config.environment === 'prod' && !(await api.isReadOnly(text))) {
+      // a locked tab runs read-only on the server, so nothing can change: no question needed
+      if (session.config.environment === 'prod' && !locked && !(await api.isReadOnly(text, engine))) {
         if (!(await confirmDialog('This is a PRODUCTION connection and the SQL changes data or schema.\n\nRun it?', { title: 'Production', danger: true }))) return;
       }
       setRunning(true);
       const startedAt = Date.now();
       let entry: Run;
       try {
-        const res = await api.executeSql(id, database, text, maxRows || NO_LIMIT, tab.id);
+        const res =
+          engine === 'postgres' ? await api.executeSql(id, database, text, maxRows || NO_LIMIT, tab.id, { schema: pgSchema, unlocked }) : await api.executeSql(id, database, text, maxRows || NO_LIMIT, tab.id);
         entry = {
           id: ++runSeq,
           sql: text,
@@ -132,7 +144,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       });
       setRunning(false);
     },
-    [running, session.config.environment, id, tab.id, database, maxRows, refreshObjects],
+    [running, session.config.environment, locked, engine, id, tab.id, database, pgSchema, unlocked, maxRows, refreshObjects],
   );
 
   const run = useCallback(
@@ -145,7 +157,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       if (sel.from !== sel.to) text = doc.slice(sel.from, sel.to);
       else if (mode === 'selection') return;
       else if (mode === 'current') {
-        const parts = await api.splitStatements(doc);
+        const parts = await api.splitStatements(doc, engine);
         // character offsets from the backend; CodeMirror uses UTF-16 offsets
         const cursorChars = [...doc.slice(0, sel.head)].length;
         const hit = parts.find((p) => cursorChars >= p.start && cursorChars <= p.end + 1) ?? [...parts].reverse().find((p) => p.start <= cursorChars) ?? parts[0];
@@ -153,7 +165,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       }
       await runText(text);
     },
-    [runText],
+    [runText, engine],
   );
 
   /** Formats the selection, or the whole editor */
@@ -164,7 +176,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
     const from = sel.from !== sel.to ? sel.from : 0;
     const to = sel.from !== sel.to ? sel.to : view.state.doc.length;
     try {
-      const pretty = formatSql(view.state.sliceDoc(from, to), { language: session.config.engine === 'mysql' ? 'mysql' : 'sqlite', keywordCase: 'upper', tabWidth: 2, linesBetweenQueries: 1 });
+      const pretty = formatSql(view.state.sliceDoc(from, to), { language: sqlDialectName(session.config.engine), keywordCase: 'upper', tabWidth: 2, linesBetweenQueries: 1 });
       view.dispatch({ changes: { from, to, insert: pretty } });
     } catch (e) {
       toast(`Could not format: ${(e as Error).message}`, 'error');
@@ -205,7 +217,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
       if (!view) return;
       const doc = view.state.doc.toString();
       api
-        .splitStatements(doc)
+        .splitStatements(doc, engine)
         .then((ranges) => {
           const v = editorRef.current?.view;
           if (v && v.state.doc.toString() === doc) v.dispatch({ effects: setStatements.of(toEditorStatements(doc, ranges)) });
@@ -213,7 +225,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         .catch(() => undefined);
     }, 250);
     return () => clearTimeout(t);
-  }, [sql]);
+  }, [sql, engine]);
 
   useEffect(() => {
     if (!tab.autoRun) return;
@@ -296,7 +308,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
 
   const extensions = useMemo(
     () => [
-      sqlLang({ dialect: session.config.engine === 'mysql' ? MySQL : SQLite, upperCaseKeywords: true }),
+      sqlLang({ dialect: codeMirrorDialect(session.config.engine), upperCaseKeywords: true }),
       EditorView.lineWrapping,
       statementGutter((stmt) => runTextRef.current(stmt.text)),
       // completion like PhpStorm: what fits where the cursor is (statement words, tables, columns, JOIN … ON)
@@ -375,7 +387,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         />
       </div>
 
-      <div className="flex h-10 shrink-0 cursor-row-resize items-center gap-1.5 border-y border-line bg-bg px-2" onMouseDown={(e) => e.target === e.currentTarget && startResize(e)}>
+      <div className="@container flex h-10 shrink-0 cursor-row-resize items-center gap-1.5 border-y border-line bg-bg px-2" onMouseDown={(e) => e.target === e.currentTarget && startResize(e)}>
         {running ? (
           <button className="btn h-7" onClick={cancel} data-testid="cancel-query">
             <Square size={12} className="fill-current" /> Cancel <span className="text-ink-3">{MOD}.</span>
@@ -427,7 +439,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
         )}
         {!running && (
           <button className="btn h-7" onClick={() => run('all')} title={`Run all statements, each with its own result (⇧${MOD}↵)`}>
-            <PlayCircle size={14} /> Run all
+            <PlayCircle size={14} /> <span className="@max-[800px]:hidden">Run all</span>
           </button>
         )}
         <select
@@ -445,7 +457,7 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           ))}
         </select>
         <button className="btn btn-ghost h-7" onClick={beautify} title={`Format the SQL (${MOD}I)`} data-testid="beautify">
-          <WandSparkles size={14} /> Beautify
+          <WandSparkles size={14} /> <span className="@max-[900px]:hidden">Beautify</span>
         </button>
         <button
           className="btn btn-ghost h-7"
@@ -453,11 +465,11 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           title={tab.savedQueryId ? `Update the saved query (${MOD}S) — ${MOD}⇧S saves a copy` : `Save to Queries (${MOD}S)`}
           data-testid="save-query"
         >
-          <Save size={14} /> {tab.savedQueryId ? 'Save' : 'Save…'}
+          <Save size={14} /> <span className="@max-[900px]:hidden">{tab.savedQueryId ? 'Save' : 'Save…'}</span>
         </button>
         <div className="relative">
           <button className={cx('btn btn-ghost h-7', historyOpen && 'bg-surface-2')} onClick={openHistory} title="Queries run on this connection">
-            <HistoryIcon size={14} /> History
+            <HistoryIcon size={14} /> <span className="@max-[900px]:hidden">History</span>
           </button>
           {historyOpen && (
             <div className="fade-in absolute left-0 top-8 z-30 max-h-80 w-[520px] overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-[var(--shadow)]">
@@ -480,9 +492,10 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
           )}
         </div>
         <button className="btn btn-ghost h-7" onClick={saveSqlFile} title="Save the editor text to a .sql file">
-          <FileDown size={14} /> .sql
+          <FileDown size={14} /> <span className="@max-[900px]:hidden">.sql</span>
         </button>
         <div className="flex-1" />
+        {prodLocked(session.config) && <WriteLock unlocked={unlocked} connection={session.config.name} database={database} onUnlock={() => unlockWrites(tab.id)} />}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col bg-surface">

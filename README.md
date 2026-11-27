@@ -2,7 +2,7 @@
 
 *Use your DB.* (Formerly Rowline.)
 
-A fast, native-feeling desktop client for **MySQL** and **SQLite**, built for macOS first.
+A fast, native-feeling desktop client for **MySQL**, **PostgreSQL** and **SQLite**, built for macOS first.
 Browse and edit tables, write SQL, back up a database, and ask Claude questions about your data —
 in one small app that opens instantly.
 
@@ -60,9 +60,15 @@ The Claude panel needs [Claude Code](https://claude.com/claude-code) installed a
 
 ### Connections
 
-- MySQL (host, port, user, password, default database, TLS: Off / Required / Verify) and SQLite files.
+- MySQL and PostgreSQL (host, port, user, password, default database, TLS: Off / Required / Verify) and SQLite files.
+- PostgreSQL works like TablePlus: one database and one schema at a time. The schema picker sits above the
+  table list (`public` first). `⌘K` finds tables and columns in every schema, and tabs outside `public` are
+  named `schema.table`. The SQL editor uses the selected schema first (`search_path`).
 - Environment tag — Local, Dev, Staging, Production — shown as a colored badge in the header.
-  A Production connection gets a red frame around the whole window, and its writes always ask for confirmation.
+  On a Production connection writes always ask for confirmation.
+- **PostgreSQL on Production is read-only by default.** Every query runs in a READ ONLY transaction that
+  Postgres itself enforces. To change data, click **Unlock writes** in a tab: it asks first, holds for that
+  tab only and ends when the tab closes. Other tabs, Claude and `udb` stay read-only.
   The Review changes dialog shows the environment, connection and database the SQL will run on.
 - **Projects**: give a connection a project (connection form → *Project*). The connection list is grouped by
   project; in the rail, a project's connections sit together under a colored badge, with a stripe in the
@@ -133,6 +139,7 @@ From the `⋯` menu in the header, with progress and Cancel.
 - **MySQL:** a plain `.sql` file written by uDB itself — no `mysqldump` needed. Structure, data, views,
   triggers and routines from one consistent snapshot. Restore runs a `.sql` file.
 - **SQLite:** a safe copy made with SQLite's own online backup; restore copies a backup back.
+- **PostgreSQL:** not available yet (use `pg_dump`).
 - A cancelled or failed backup leaves no half-written file.
 
 ### Relation diagram
@@ -174,6 +181,7 @@ udb tables --conn "prod core"                     # tables with row estimates
 udb describe orders --conn "prod core"            # columns, indexes, foreign keys
 udb query --conn "prod core" "SELECT id, status FROM orders WHERE id = 42"
 udb query -f table -n 20 "SELECT …"               # json (default), table or csv; --db to pick a database
+udb query --conn "pg core" -s billing "SELECT …"  # PostgreSQL: -s/--schema (default: the schema picked in uDB)
 ```
 
 - Talks to the running app over a Unix socket that only your user can open
@@ -199,8 +207,10 @@ To check data in the database, use the `udb` command (read-only; run `udb help` 
 Ask questions about your data in plain language. uDB uses the Claude Code you already have installed
 and its login — no API key.
 
-- Claude can only read. Every query runs in a read-only transaction (MySQL) or on a read-only
+- Claude can only read. Every query runs in a read-only transaction (MySQL, PostgreSQL) or on a read-only
   connection (SQLite), max 200 rows, 30 s.
+- PostgreSQL: Claude and `udb` refuse to run as a superuser or as a member of `pg_read_server_files`,
+  `pg_write_server_files` or `pg_execute_server_program`. Connect with a read-only role.
 - On Production connections Claude's queries wait for your approval.
 - Per connection you choose what Claude may see: schema + data, schema only, or off.
 - Optional project folder per connection that Claude may read (Read, Grep, Glob only — nothing else,
@@ -281,14 +291,15 @@ dev bridge.
 
 ```bash
 npm test                   # frontend unit tests (Vitest)
-./scripts/test-rust.sh     # Rust tests (SQLite always; MySQL when the test DB in dev/docker runs)
+./scripts/test-rust.sh     # Rust tests (SQLite always; MySQL and PostgreSQL when the test DBs in dev/docker run)
 ```
 
-MySQL tests run when `ROWLINE_TEST_MYSQL="host:port:user:password:database"` is set.
+MySQL tests run when `ROWLINE_TEST_MYSQL="host:port:user:password:database"` is set, PostgreSQL tests
+when `ROWLINE_TEST_POSTGRES` (same form) is set.
 `scripts/test-rust.sh` sets it from `dev/docker/.env` (not in git). Start the test MySQL once:
 
 ```bash
-cd dev/docker && docker compose up -d   # MySQL 8.4 on 127.0.0.1:13306 with a small `shop` database
+cd dev/docker && docker compose up -d   # MySQL 8.4 on 127.0.0.1:13306 and PostgreSQL 16 on 127.0.0.1:15432, each with a small `shop` database
 ```
 
 ## Build

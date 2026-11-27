@@ -1,6 +1,7 @@
 import { Code2, Eye, Network, Plus, Table2, X } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { tableTitle } from '../lib/engine';
 import { MOD, cx } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
 import { useWs, useWsActions } from '../store/workspace';
@@ -60,8 +61,10 @@ export default function TabBar() {
       {tabs.map((t, i) => {
         const active = t.id === activeTabId;
         const Icon = t.kind === 'query' ? Code2 : t.kind === 'diagram' ? Network : t.objectKind === 'view' ? Eye : Table2;
-        const title = t.kind === 'query' ? t.title : t.kind === 'diagram' ? `Relations${t.database ? ` · ${t.database}` : ''}` : t.table;
-        const hint = t.kind === 'table' && t.database ? `${t.database}.${t.table}` : title;
+        // Postgres: `billing.invoices` outside `public`; MySQL and SQLite tabs have no schema
+        const title =
+          t.kind === 'query' ? t.title : t.kind === 'diagram' ? `Relations${t.database ? ` · ${t.database}` : ''}${t.schema && t.schema !== 'public' ? ` · ${t.schema}` : ''}` : tableTitle(t.table, t.schema);
+        const hint = t.kind === 'table' && t.database ? `${t.database}.${t.schema ? `${t.schema}.` : ''}${t.table}` : title;
         const unsaved = (dirty[t.id] ?? 0) > 0;
         const dragged = drag?.id === t.id;
         const offset = !drag || dragged ? 0 : drag.from < drag.to && i > drag.from && i <= drag.to ? -drag.shift : drag.to < drag.from && i >= drag.to && i < drag.from ? drag.shift : 0;

@@ -1,6 +1,7 @@
 import type { SchemaSnapshot, SchemaTable } from './schemaDiff';
 import type { VirtualKey } from './virtualKeys';
 import type {
+  Engine,
   ChangeSet,
   ChatConnection,
   ChatEvent,
@@ -24,6 +25,12 @@ export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in
 const DEV_BRIDGE_URL = import.meta.env.VITE_DEV_BRIDGE_URL ?? 'http://127.0.0.1:1421';
 
 export class ApiError extends Error {}
+
+/** Postgres options of a statement or an edit: the schema, and whether the tab unlocked writes (prod) */
+export interface WriteOptions {
+  schema?: string | null;
+  unlocked?: boolean;
+}
 
 /** Calls a backend command: Tauri `invoke` in the app, the HTTP dev bridge in a browser. */
 async function call<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -56,33 +63,49 @@ export const api = {
   disconnect: (id: string) => call<boolean>('disconnect', { id }),
   /** the database the app shows; the `rowline` command uses it by default */
   setActiveDatabase: (id: string, database: string | null) => call<boolean>('set_active_database', { id, database }),
+  /** the Postgres schema the app shows; Claude, MCP and `udb` use it by default (null clears it) */
+  setActiveSchema: (id: string, schema: string | null) => call<boolean>('set_active_schema', { id, schema }),
   cliStatus: () => call<{ installed: boolean; link: string | null; target: string | null; socket: string }>('cli_status'),
   installCli: () => call<string>('install_cli'),
   listDatabases: (id: string) => call<string[]>('list_databases', { id }),
-  listObjects: (id: string, database: string | null) => call<DbObject[]>('list_objects', { id, database }),
+  /** user schemas of a Postgres database (`public` first, no system schemas); [] for MySQL and SQLite */
+  listSchemas: (id: string, database: string | null) => call<string[]>('list_schemas', { id, database }),
+  /** schema: Postgres only; null/undefined = the server default (`public`) */
+  listObjects: (id: string, database: string | null, schema?: string | null) => call<DbObject[]>('list_objects', { id, database, schema }),
   schemaColumns: (id: string, database: string | null) => call<Record<string, string[]>>('schema_columns', { id, database }),
-  tableStructure: (id: string, database: string | null, table: string) =>
-    call<TableStructure>('table_structure', { id, database, table }),
-  /** owner: the tab running it; Cancel in that tab stops only its queries */
-  selectPage: (id: string, request: PageRequest, owner?: string) => call<QueryResult>('select_page', { id, request, owner }),
-  countRows: (id: string, request: PageRequest, owner?: string) => call<number>('count_rows', { id, request, owner }),
-  executeSql: (id: string, database: string | null, sql: string, maxRows?: number, owner?: string) =>
-    call<QueryResult[]>('execute_sql', { id, database, sql, maxRows, owner }),
-  previewChanges: (id: string, database: string | null, table: string, changes: ChangeSet) =>
-    call<string[]>('preview_changes', { id, database, table, changes }),
-  applyChanges: (id: string, database: string | null, table: string, changes: ChangeSet) =>
-    call<number>('apply_changes', { id, database, table, changes }),
+  tableStructure: (id: string, database: string | null, table: string, schema?: string | null) =>
+    call<TableStructure>('table_structure', { id, database, schema, table }),
+  /**
+   * owner: the tab running it; Cancel in that tab stops only its queries. The schema goes in `request.schema`.
+   * unlocked: the tab unlocked writes (prod Postgres runs read-only without it)
+   */
+  selectPage: (id: string, request: PageRequest, owner?: string, unlocked?: boolean) => call<QueryResult>('select_page', { id, request, owner, unlocked }),
+  countRows: (id: string, request: PageRequest, owner?: string, unlocked?: boolean) => call<number>('count_rows', { id, request, owner, unlocked }),
+  /** Postgres: `search_path` is set to the schema, then `public` */
+  executeSql: (id: string, database: string | null, sql: string, maxRows?: number, owner?: string, opts: WriteOptions = {}) =>
+    call<QueryResult[]>('execute_sql', { id, database, schema: opts.schema, sql, maxRows, owner, unlocked: opts.unlocked }),
+  previewChanges: (id: string, database: string | null, table: string, changes: ChangeSet, schema?: string | null) =>
+    call<string[]>('preview_changes', { id, database, schema, table, changes }),
+  applyChanges: (id: string, database: string | null, table: string, changes: ChangeSet, opts: WriteOptions = {}) =>
+    call<number>('apply_changes', { id, database, schema: opts.schema, table, changes, unlocked: opts.unlocked }),
   cancelQuery: (id: string, owner?: string) => call<boolean>('cancel_query', { id, owner }),
   /** most common values of a column (filter suggestions); empty when the server is slow */
-  commonValues: (id: string, database: string | null, table: string, column: string) => call<(string | number | null)[]>('common_values', { id, database, table, column }),
+  commonValues: (id: string, database: string | null, table: string, column: string, schema?: string | null) =>
+    call<(string | number | null)[]>('common_values', { id, database, schema, table, column }),
   listVirtualKeys: (connectionId: string, database: string | null) => call<VirtualKey[]>('list_virtual_keys', { connectionId, database }),
   saveVirtualKey: (key: Omit<VirtualKey, 'id'> & { id?: string }) => call<VirtualKey>('save_virtual_key', { id: '', ...key }),
   deleteVirtualKey: (id: string) => call<null>('delete_virtual_key', { id }),
-  schemaGraph: (id: string, database: string | null) => call<SchemaTable[]>('schema_graph', { id, database }),
+  schemaGraph: (id: string, database: string | null, schema?: string | null) => call<SchemaTable[]>('schema_graph', { id, database, schema }),
   schemaSnapshots: (id: string, database: string | null) => call<SchemaSnapshot[]>('schema_snapshots', { id, database }),
-  saveSchemaSnapshot: (id: string, database: string | null) => call<SchemaSnapshot>('schema_snapshot_save', { id, database }),
-  splitStatements: (sql: string) => call<StatementRange[]>('split_statements', { sql }),
-  isReadOnly: (sql: string) => call<boolean>('is_read_only', { sql }),
+  /**
+   * schema picks the tables that are read (Postgres); snapshotKey is the key it is stored under when that is not
+   * the database (Postgres `<db>/<schema>`, the same key `schemaSnapshots` then reads)
+   */
+  saveSchemaSnapshot: (id: string, database: string | null, schema?: string | null, snapshotKey?: string | null) =>
+    call<SchemaSnapshot>('schema_snapshot_save', { id, database, schema, snapshotKey }),
+  /** engine picks the lexer rules (Postgres: backslash escapes only in E'…'); absent = MySQL rules */
+  splitStatements: (sql: string, engine?: Engine) => call<StatementRange[]>('split_statements', { sql, engine }),
+  isReadOnly: (sql: string, engine?: Engine) => call<boolean>('is_read_only', { sql, engine }),
   listHistory: (connectionId?: string) => call<HistoryEntry[]>('list_history', { connectionId }),
   listSavedQueries: (connectionId: string) => call<SavedQuery[]>('list_saved_queries', { connectionId }),
   saveQuery: (q: { id?: string; connectionId: string; name: string; sql: string; database: string | null }) => call<SavedQuery>('save_query', { ...q }),

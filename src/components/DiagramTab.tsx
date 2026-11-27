@@ -75,7 +75,11 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
   const themeMode = useApp((s) => s.theme);
   const { openTable, updateTab } = useWsActions();
   const database = tab.database;
-  const key = tableKey(cid, database);
+  // Postgres: the diagram of one schema (absent for MySQL and SQLite)
+  const schema = tab.schema ?? null;
+  /** opening a table from the diagram opens it in the diagram's schema */
+  const inSchema = tab.schema !== undefined ? { schema } : undefined;
+  const key = tableKey(cid, database, schema);
   const entry = useSchema((s) => s.entries[key]) ?? emptySchema;
   const flow = useReactFlow<TableNodeType, Edge>();
   const compact = useStore((s) => s.transform[2] < COMPACT_ZOOM);
@@ -113,12 +117,12 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
   const layoutSeq = useRef(0);
 
   useEffect(() => {
-    if (active) useSchema.getState().load(cid, database);
-  }, [active, cid, database]);
+    if (active) useSchema.getState().load(cid, database, false, schema);
+  }, [active, cid, database, schema]);
 
   const compare = entry.compareTo >= 0 ? entry.snapshots[entry.compareTo] ?? null : null;
   // saved virtual foreign keys count as relations (also in the snapshot, so they never show as a change)
-  const virtualKeys = useVirtualKeys(cid, database);
+  const virtualKeys = useVirtualKeys(cid, database, schema);
   const diff = useMemo(
     () => (entry.live ? diffSchema(showChanges && compare ? schemaWithKeys(compare.tables, virtualKeys) : null, schemaWithKeys(entry.live, virtualKeys)) : null),
     [entry.live, compare, showChanges, virtualKeys],
@@ -332,12 +336,12 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
         setEdges((es) => es.map((e) => (e.selected ? { ...e, selected: false } : e)));
       }
     },
-    open: (name, view) => openTable(name, byName.get(name)?.kind, view),
+    open: (name, view) => openTable(name, byName.get(name)?.kind, view, inSchema),
     ask: () => setAskOpen(true),
-    saveGuess: (r) => useSchema.getState().saveKey(cid, database, { table: r.from, columns: r.fromColumns, refTable: r.to, refColumns: r.toColumns }),
+    saveGuess: (r) => useSchema.getState().saveKey(cid, database, { table: r.from, columns: r.fromColumns, refTable: r.to, refColumns: r.toColumns }, schema),
     removeVirtual: (r) => {
       const k = virtualKeys.find((v) => v.table === r.from && v.columns.join(',') === r.fromColumns.join(','));
-      if (k) useSchema.getState().deleteKey(cid, database, k.id);
+      if (k) useSchema.getState().deleteKey(cid, database, k.id, schema);
     },
     expand: addRoot,
     filterByName,
@@ -374,7 +378,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
     }
   };
 
-  if (entry.error) return <CenteredState error={entry.error} onRetry={() => useSchema.getState().load(cid, database, true)} />;
+  if (entry.error) return <CenteredState error={entry.error} onRetry={() => useSchema.getState().load(cid, database, true, schema)} />;
   if (!entry.live) return <CenteredState loading />;
 
   return (
@@ -429,7 +433,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
             <select
               className="h-7 min-w-0 max-w-[170px] shrink rounded-md border border-line bg-surface px-1.5 text-[12px] text-ink-2"
               value={entry.compareTo}
-              onChange={(e) => useSchema.getState().setCompare(cid, database, Number(e.target.value))}
+              onChange={(e) => useSchema.getState().setCompare(cid, database, Number(e.target.value), schema)}
               disabled={!showChanges}
               aria-label="Compare with snapshot"
             >
@@ -450,7 +454,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
         <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2.5 text-ink-2" onClick={() => flow.fitView({ padding: 0.12, duration: 300, maxZoom: 1 })} title="Fit everything in view">
           <Maximize size={13} /> Fit
         </button>
-        <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2.5 text-ink-2" onClick={() => useSchema.getState().load(cid, database, true)} title="Read the schema again">
+        <button className="btn btn-ghost h-7 shrink-0 gap-1.5 px-2.5 text-ink-2" onClick={() => useSchema.getState().load(cid, database, true, schema)} title="Read the schema again">
           {entry.loading || laying ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
         </button>
       </div>
@@ -517,7 +521,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
           multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
           nodesConnectable={false}
           proOptions={{ hideAttribution: true }}
-          onNodeDoubleClick={(_, n) => openTable(n.id)}
+          onNodeDoubleClick={(_, n) => openTable(n.id, undefined, undefined, inSchema)}
           onNodeMouseEnter={(_, n) => useDiagramView.getState().setHover(tab.id, n.id)}
           onNodeMouseLeave={() => useDiagramView.getState().setHover(tab.id, null)}
           onPaneClick={() => setAskOpen(false)}
@@ -557,7 +561,7 @@ function Diagram({ tab, active }: { tab: DiagramTabType; active: boolean }) {
             onAsk={(question, ts, rs) =>
               useChat.getState().compose(
                 cid,
-                diagramPrompt({ question, database, engine: session.config.engine, tables: ts, relations: rs, changesSince: showChanges ? since : null, projectFolder: config.projectFolder ?? null }),
+                diagramPrompt({ question, database, schema, engine: session.config.engine, tables: ts, relations: rs, changesSince: showChanges ? since : null, projectFolder: config.projectFolder ?? null }),
               )
             }
             projectFolder={config.projectFolder ?? null}

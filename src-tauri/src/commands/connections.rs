@@ -9,18 +9,30 @@ use crate::model::*;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ActiveSchemaArgs {
+    id: String,
+    #[serde(default)]
+    schema: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActiveDatabaseArgs {
     id: String,
     #[serde(default)]
     database: Option<String>,
 }
 
-pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "list_databases_for", "connect", "disconnect", "set_active_database"];
+pub(super) const COMMANDS: &[&str] = &["list_connections", "save_connection", "delete_connection", "test_connection", "list_databases_for", "connect", "disconnect", "set_active_database", "set_active_schema"];
 
 pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
     match command {
         "list_connections" => ok(state.store.connections()?),
-        "save_connection" => ok(save_connection(state, parse(args)?)?),
+        "save_connection" => {
+            let saved = save_connection(state, parse(args)?)?;
+            state.manager.apply_config(&saved).await;
+            ok(saved)
+        }
         "delete_connection" => {
             let a: IdArgs = parse(args)?;
             state.manager.remove(&a.id).await;
@@ -40,9 +52,18 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             let mut config = input.config.clone();
             // the list must not depend on the database typed so far (a wrong name would fail the login)
             config.database = None;
-            let session = Session::open(&config, password.as_deref()).await?;
+            let session = match Session::open(&config, password.as_deref()).await {
+                Ok(s) => s,
+                // Postgres always logs in to a database (default `postgres`); a login may only be allowed into the typed one
+                Err(e) if config.engine == Engine::Postgres && input.config.database.as_deref().is_some_and(|d| !d.is_empty()) => {
+                    Session::open(&input.config, password.as_deref()).await.map_err(|_| e)?
+                }
+                Err(e) => return Err(e),
+            };
             let mut names = session.databases().await?;
-            names.retain(|n| !matches!(n.as_str(), "information_schema" | "performance_schema" | "mysql" | "sys"));
+            if config.engine == Engine::Mysql {
+                names.retain(|n| !matches!(n.as_str(), "information_schema" | "performance_schema" | "mysql" | "sys"));
+            }
             ok(names)
         }
         "connect" => {
@@ -63,6 +84,12 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "set_active_database" => {
             let a: ActiveDatabaseArgs = parse(args)?;
             state.manager.set_database(&a.id, a.database.as_deref());
+            ok(true)
+        }
+        // the Postgres schema the app shows; Claude, MCP and `udb` use it when no schema is given
+        "set_active_schema" => {
+            let a: ActiveSchemaArgs = parse(args)?;
+            state.manager.set_schema(&a.id, a.schema.as_deref());
             ok(true)
         }
         other => Err(super::unknown(other)),

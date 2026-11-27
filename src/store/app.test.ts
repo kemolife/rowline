@@ -12,14 +12,16 @@ vi.mock('../lib/api', () => ({
     saveConnection: vi.fn(async (c: unknown) => c),
     listDatabases: vi.fn(async () => ['shop']),
     listObjects: vi.fn(async () => [{ name: 'orders', kind: 'table', rowEstimate: 1 }]),
+    listSchemas: vi.fn(async () => [] as string[]),
+    setActiveSchema: vi.fn(async () => true),
   },
   confirmDialog: vi.fn(async () => confirmAnswer.value),
 }));
 
 import { api } from '../lib/api';
-import { activeWorkspace, needsReconnect, useApp } from './app';
+import { activeWorkspace, needsReconnect, queryTabUnlocked, useApp, type QueryTab } from './app';
 
-const conn = (id: string, engine: 'mysql' | 'sqlite' = 'mysql') => ({ id, name: id, engine, environment: 'dev' as const });
+const conn = (id: string, engine: 'mysql' | 'sqlite' | 'postgres' = 'mysql', environment: 'dev' | 'prod' = 'dev') => ({ id, name: id, engine, environment });
 
 describe('workspaces', () => {
   beforeEach(() => {
@@ -299,5 +301,203 @@ describe('color style', () => {
     useApp.getState().setColorStyle('blue');
     expect(document.documentElement.hasAttribute('data-style')).toBe(false);
     expect(useApp.getState().colorStyle).toBe('blue');
+  });
+});
+
+describe('postgres schemas', () => {
+  const objects: Record<string, { name: string; kind: 'table' | 'view'; rowEstimate: number | null }[]> = {
+    public: [],
+    billing: [{ name: 'invoices', kind: 'table', rowEstimate: 3 }],
+    sales: [{ name: 'orders', kind: 'table', rowEstimate: 9 }],
+  };
+  beforeEach(() => {
+    vi.mocked(api.listSchemas).mockReset().mockResolvedValue(['public', 'billing', 'sales']);
+    vi.mocked(api.setActiveSchema).mockClear();
+    vi.mocked(api.listObjects).mockReset().mockImplementation(async (_id, _db, schema) => objects[schema ?? 'public'] ?? []);
+    vi.mocked(api.listDatabases).mockResolvedValue(['shop', 'crm']);
+    useApp.setState({ connections: [conn('p', 'postgres')], workspaces: {}, openOrder: [], activeConnectionId: null, launcherOpen: false });
+  });
+  const session = () => useApp.getState().workspaces.p.session;
+
+  it('picks the first schema with tables when public is empty and tells the backend', async () => {
+    await useApp.getState().connect('p');
+    expect(api.listSchemas).toHaveBeenCalledWith('p', 'shop');
+    expect(session()).toMatchObject({ database: 'shop', schemas: ['public', 'billing', 'sales'], schema: 'billing' });
+    expect(session().objects.map((o) => o.name)).toEqual(['invoices']);
+    expect(api.setActiveSchema).toHaveBeenCalledWith('p', 'billing');
+  });
+
+  it('switches schema and lists its tables', async () => {
+    await useApp.getState().connect('p');
+    await useApp.getState().setSchema('p', 'sales');
+    expect(session().schema).toBe('sales');
+    expect(session().objects.map((o) => o.name)).toEqual(['orders']);
+    expect(api.setActiveSchema).toHaveBeenLastCalledWith('p', 'sales');
+    expect(api.listObjects).toHaveBeenLastCalledWith('p', 'shop', 'sales');
+  });
+
+  it('keeps the chosen schema on reconnect', async () => {
+    await useApp.getState().connect('p');
+    await useApp.getState().setSchema('p', 'sales');
+    await useApp.getState().reconnect('p');
+    expect(session().schema).toBe('sales');
+    expect(session().objects.map((o) => o.name)).toEqual(['orders']);
+  });
+
+  it('loads the schemas of another database', async () => {
+    await useApp.getState().connect('p');
+    vi.mocked(api.listSchemas).mockResolvedValue(['public']);
+    objects.public = [{ name: 'leads', kind: 'table', rowEstimate: 1 }];
+    try {
+      await useApp.getState().selectDatabase('p', 'crm');
+      expect(api.listSchemas).toHaveBeenLastCalledWith('p', 'crm');
+      expect(session()).toMatchObject({ database: 'crm', schemas: ['public'], schema: 'public' });
+      expect(session().objects.map((o) => o.name)).toEqual(['leads']);
+    } finally {
+      objects.public = [];
+    }
+  });
+
+  it('shows no tables for a database without user schemas', async () => {
+    vi.mocked(api.listSchemas).mockResolvedValue([]);
+    await useApp.getState().connect('p');
+    expect(session()).toMatchObject({ schemas: [], schema: null, objects: [], loadingObjects: false });
+    expect(api.listObjects).not.toHaveBeenCalled();
+  });
+
+  it('MySQL and SQLite have no schemas', async () => {
+    useApp.setState({ connections: [conn('a'), conn('b', 'sqlite')] });
+    await useApp.getState().connect('a');
+    await useApp.getState().connect('b');
+    expect(api.listSchemas).not.toHaveBeenCalled();
+    expect(useApp.getState().workspaces.a.session).toMatchObject({ schemas: [], schema: null });
+    expect(useApp.getState().workspaces.b.session).toMatchObject({ schemas: [], schema: null });
+  });
+});
+
+describe('postgres table tabs', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    vi.mocked(api.listSchemas).mockReset().mockResolvedValue(['public', 'billing']);
+    vi.mocked(api.listObjects).mockReset().mockImplementation(async (_id, _db, schema) => [{ name: schema === 'billing' ? 'invoices' : 'orders', kind: 'table', rowEstimate: 1 }]);
+    useApp.setState({ connections: [conn('p', 'postgres')], workspaces: {}, openOrder: [], activeConnectionId: null, launcherOpen: false, pinned: {}, recent: {} });
+    await useApp.getState().connect('p');
+  });
+  const tabs = () => useApp.getState().workspaces.p.tabs;
+
+  it('a table tab keeps the schema it was opened in', async () => {
+    useApp.getState().openTable('p', 'orders');
+    await useApp.getState().setSchema('p', 'billing');
+    useApp.getState().openTable('p', 'invoices');
+    expect(tabs()).toMatchObject([
+      { kind: 'table', table: 'orders', database: 'shop', schema: 'public' },
+      { kind: 'table', table: 'invoices', database: 'shop', schema: 'billing' },
+    ]);
+  });
+
+  it('the same table name in two schemas opens two tabs; the same schema reuses the tab', async () => {
+    useApp.getState().openTable('p', 'orders');
+    useApp.getState().openTable('p', 'orders', 'table', 'data', { schema: 'billing' });
+    useApp.getState().openTable('p', 'orders');
+    expect(tabs().map((t) => (t.kind === 'table' ? `${t.schema}.${t.table}` : ''))).toEqual(['public.orders', 'billing.orders']);
+    expect(useApp.getState().workspaces.p.activeTabId).toBe(tabs()[0].id);
+  });
+
+  it('pins and recent tables are kept per schema', async () => {
+    useApp.getState().togglePin('p', 'orders');
+    useApp.getState().openTable('p', 'orders');
+    expect(useApp.getState().pinned['p/shop/public']).toEqual(['orders']);
+    expect(useApp.getState().recent['p/shop/public']).toEqual(['orders']);
+    expect(useApp.getState().pinned['p/shop']).toBeUndefined();
+  });
+
+  it('a diagram tab belongs to one schema', async () => {
+    useApp.getState().openDiagram('p');
+    await useApp.getState().setSchema('p', 'billing');
+    useApp.getState().openDiagram('p');
+    expect(tabs()).toMatchObject([{ kind: 'diagram', schema: 'public' }, { kind: 'diagram', schema: 'billing' }]);
+  });
+
+  it('MySQL tabs have no schema and keep their keys', async () => {
+    useApp.setState({ connections: [conn('a')] });
+    await useApp.getState().connect('a');
+    useApp.getState().openTable('a', 'orders');
+    useApp.getState().togglePin('a', 'orders');
+    expect(useApp.getState().workspaces.a.tabs[0]).not.toHaveProperty('schema');
+    expect(useApp.getState().pinned['a/shop']).toEqual(['orders']);
+  });
+});
+
+describe('unlocking writes per tab', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    vi.mocked(api.listSchemas).mockResolvedValue(['public']);
+    useApp.setState({ connections: [conn('p', 'postgres', 'prod')], workspaces: {}, openOrder: [], activeConnectionId: null, launcherOpen: false });
+    await useApp.getState().connect('p');
+    useApp.getState().openQuery('p', 'update a set b = 1');
+    useApp.getState().openTable('p', 'orders');
+  });
+  const tabs = () => useApp.getState().workspaces.p.tabs;
+  const unlocked = (id: string) => (tabs().find((t) => t.id === id) as { writesUnlocked?: boolean } | undefined)?.writesUnlocked ?? false;
+
+  it('unlocks one tab only, and closing it drops the unlock', async () => {
+    const [a, b] = tabs().map((t) => t.id);
+    useApp.getState().unlockWrites('p', a);
+    expect(unlocked(a)).toBe(true);
+    expect(unlocked(b)).toBe(false);
+    await useApp.getState().closeTab('p', a);
+    expect(tabs().map((t) => t.id)).toEqual([b]);
+    expect(unlocked(b)).toBe(false);
+    expect(tabs().some((t) => 'writesUnlocked' in t && t.writesUnlocked)).toBe(false);
+  });
+
+  it('closing several tabs drops their unlock too', async () => {
+    const [a, b] = tabs().map((t) => t.id);
+    useApp.getState().unlockWrites('p', a);
+    useApp.getState().unlockWrites('p', b);
+    await useApp.getState().closeTabs('p', [a]);
+    expect(unlocked(b)).toBe(true);
+    expect(tabs()).toHaveLength(1);
+  });
+
+  it('a query tab unlock holds only for the database and schema it was given for', async () => {
+    const ws = () => useApp.getState().workspaces.p;
+    const q = () => ws().tabs.find((t) => t.kind === 'query') as QueryTab;
+    const open = () => queryTabUnlocked(q(), ws().session);
+    vi.mocked(api.listSchemas).mockResolvedValue(['public', 'billing']);
+    useApp.getState().unlockWrites('p', q().id);
+    expect(open()).toBe(true);
+    // the editor follows the schema picker: another schema locks the tab again
+    await useApp.getState().setSchema('p', 'billing');
+    expect(ws().session.schema).toBe('billing');
+    expect(open()).toBe(false);
+    await useApp.getState().setSchema('p', 'public');
+    expect(open()).toBe(false);
+    // and another database
+    useApp.getState().unlockWrites('p', q().id);
+    expect(open()).toBe(true);
+    await useApp.getState().selectDatabase('p', 'crm');
+    expect(open()).toBe(false);
+    await useApp.getState().selectDatabase('p', 'shop');
+    expect(open()).toBe(false);
+    // a schema switch the user did not pick (the old schema is gone) counts too
+    useApp.getState().unlockWrites('p', q().id);
+    useApp.setState({ workspaces: { ...useApp.getState().workspaces, p: { ...ws(), session: { ...ws().session, schema: 'billing' } } } });
+    expect(open()).toBe(false);
+  });
+
+  it('is never saved with the tabs and never restored', async () => {
+    const [a] = tabs().map((t) => t.id);
+    useApp.getState().unlockWrites('p', a);
+    await new Promise((r) => setTimeout(r, 350));
+    const saved = localStorage.getItem('rowline.tabs.p') ?? '';
+    expect(saved).toContain('update a set b = 1');
+    expect(saved).not.toContain('writesUnlocked');
+    // a saved copy that has the flag anyway (older build, edited storage) is restored locked
+    localStorage.setItem('rowline.tabs.p', JSON.stringify({ tabs: [{ kind: 'query', title: 'Q', sql: 'x', database: 'shop', writesUnlocked: true }], active: 0 }));
+    await useApp.getState().disconnect('p');
+    await useApp.getState().connect('p');
+    expect(tabs()).toHaveLength(1);
+    expect(unlocked(tabs()[0].id)).toBe(false);
   });
 });

@@ -18,17 +18,20 @@ pub const EXIT_NO_APP: i32 = 3;
 const HELP: &str = "udb — read-only database access through the uDB app
 
 Usage:
-  udb connections                      Open connections: name, environment, engine, database
-  udb tables   [--conn NAME] [--db DB] Tables and views, with estimated row counts
-  udb describe TABLE [--conn NAME] [--db DB]
+  udb connections                      Open connections: name, environment, engine, database, schema
+  udb tables   [--conn NAME] [--db DB] [--schema S]
+                                           Tables and views, with estimated row counts
+  udb describe TABLE [--conn NAME] [--db DB] [--schema S]
                                            Columns, indexes and foreign keys of a table
-  udb query    [--conn NAME] [--db DB] [--limit N] [--format json|table|csv] \"SQL\"
+  udb query    [--conn NAME] [--db DB] [--schema S] [--limit N] [--format json|table|csv] \"SQL\"
                                            Run one read-only statement (SQL can also come on stdin)
 
 Options:
   -c, --conn NAME    Connection by name (any case; a unique part of the name is enough).
                      Not needed when only one connection is open.
-  -d, --db DB        MySQL database. Default: the one selected in uDB.
+  -d, --db DB        MySQL or PostgreSQL database. Default: the one selected in uDB.
+  -s, --schema S     PostgreSQL schema. Default: the one selected in uDB, else public.
+                     Plain table names in a query look in this schema first, then in public.
   -n, --limit N      Most rows to return (default 200, at most 1000).
   -f, --format F     json (default, compact), table or csv.
 
@@ -37,6 +40,9 @@ Rules:
   - Read-only: one SELECT, SHOW, DESCRIBE, EXPLAIN or WITH … SELECT statement. Writes, several
     statements, INTO OUTFILE, FOR UPDATE, LOAD_FILE, GET_LOCK, SLEEP and similar are refused before
     they reach the database, and the query runs in a read-only transaction with a 30 s time limit.
+  - PostgreSQL: system schemas (pg_catalog, information_schema) can't be used, and a login that is a
+    superuser or a member of pg_read_server_files, pg_write_server_files or pg_execute_server_program
+    is refused. Connect such databases in uDB with a smaller role.
   - Text values longer than 2,048 characters are cut. Every query is logged in uDB's History.
 
 `rowline` is the old name of this command and still works.
@@ -70,6 +76,7 @@ pub struct Parsed {
     pub cmd: String,
     pub conn: Option<String>,
     pub db: Option<String>,
+    pub schema: Option<String>,
     pub limit: Option<usize>,
     pub format: Format,
     /// SQL for query, table name for describe
@@ -99,6 +106,7 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         match flag {
             "-c" | "--conn" | "--connection" => p.conn = Some(value("--conn")?),
             "-d" | "--db" | "--database" => p.db = Some(value("--db")?),
+            "-s" | "--schema" => p.schema = Some(value("--schema")?),
             "-n" | "--limit" => {
                 let v = value("--limit")?;
                 p.limit = Some(v.parse().map_err(|_| format!("--limit must be a number, got \"{v}\""))?);
@@ -165,17 +173,17 @@ fn run(args: &[String]) -> Result<String, (i32, String)> {
         "--version" | "-V" => return Ok(format!("rowline {}\n", env!("CARGO_PKG_VERSION"))),
         "install" => return install().map_err(|e| (EXIT_ERROR, e)),
         "connections" => json!({ "cmd": "connections" }),
-        "tables" => json!({ "cmd": "tables", "conn": p.conn, "db": p.db }),
+        "tables" => json!({ "cmd": "tables", "conn": p.conn, "db": p.db, "schema": p.schema }),
         "describe" => {
             let table = p.arg.clone().ok_or((EXIT_ERROR, "Name the table: udb describe TABLE".to_string()))?;
-            json!({ "cmd": "describe", "conn": p.conn, "db": p.db, "table": table })
+            json!({ "cmd": "describe", "conn": p.conn, "db": p.db, "schema": p.schema, "table": table })
         }
         "query" => {
             let sql = match p.arg.as_deref() {
                 Some("-") | None => read_stdin().map_err(|e| (EXIT_ERROR, e))?,
                 Some(s) => s.to_string(),
             };
-            json!({ "cmd": "query", "conn": p.conn, "db": p.db, "sql": sql, "limit": p.limit })
+            json!({ "cmd": "query", "conn": p.conn, "db": p.db, "schema": p.schema, "sql": sql, "limit": p.limit })
         }
         other => return Err((EXIT_ERROR, format!("Unknown command \"{other}\". See rowline help."))),
     };
@@ -237,7 +245,7 @@ fn render(cmd: &str, data: &Value, format: Format) -> String {
         ("query", Format::Csv) => csv(&strings(&data["columns"]), &rows(&data["rows"])),
         ("connections", Format::Table) => {
             let list = data.as_array().cloned().unwrap_or_default();
-            let cols = ["name", "environment", "engine", "database"].map(String::from).to_vec();
+            let cols = ["name", "environment", "engine", "database", "schema"].map(String::from).to_vec();
             let body: Vec<Vec<String>> = list.iter().map(|c| cols.iter().map(|k| cell(&c[k.as_str()])).collect()).collect();
             table(&cols, &body)
         }
@@ -355,6 +363,12 @@ mod tests {
         assert!(parse(&args(&["query", "--conn"])).unwrap_err().contains("needs a value"));
         assert!(parse(&args(&["query", "--wat"])).unwrap_err().contains("Unknown option"));
         assert!(parse(&args(&["query", "-f", "xml"])).unwrap_err().contains("Unknown format"));
+        let p = parse(&args(&["query", "--schema", "billing", "SELECT 1"])).unwrap();
+        assert_eq!((p.schema.as_deref(), p.arg.as_deref()), (Some("billing"), Some("SELECT 1")));
+        assert_eq!(parse(&args(&["tables", "--schema=billing"])).unwrap().schema.as_deref(), Some("billing"));
+        assert_eq!(parse(&args(&["tables", "-s", "billing"])).unwrap().schema.as_deref(), Some("billing"));
+        assert!(parse(&args(&["--unlocked", "query", "SELECT 1"])).unwrap_err().contains("Unknown option"), "udb can't unlock writes");
+        assert!(HELP.contains("--schema"));
     }
 
     #[test]

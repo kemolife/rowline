@@ -14,8 +14,17 @@ pub enum ChatEvent {
     TextDelta { text: String },
     Text { text: String },
     Activity { label: String },
-    /// `database`: the MySQL database the tool uses (None for SQLite or an unknown connection)
-    ToolCall { call_id: String, tool: String, connection: Option<String>, database: Option<String>, sql: Option<String> },
+    /// `database`: the MySQL/Postgres database the tool uses (None for SQLite or an unknown connection);
+    /// `schema`: the Postgres schema (left out otherwise)
+    ToolCall {
+        call_id: String,
+        tool: String,
+        connection: Option<String>,
+        database: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema: Option<String>,
+        sql: Option<String>,
+    },
     ToolResult { call_id: String, rows: Option<usize>, truncated: bool, elapsed_ms: Option<u64>, error: Option<String> },
     Approval { request_id: String, connection: String, connection_name: String, sql: String },
     ApprovalAnswered { request_id: String, allowed: bool },

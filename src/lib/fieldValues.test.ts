@@ -41,5 +41,7 @@ describe('field value menu', () => {
   it('SQLite offers DEFAULT only for new rows', () => {
     expect(kinds(valueOptions(field('TEXT', { defaultValue: "'x'" }), 'sqlite', false, 'y'))).not.toContain('default');
     expect(kinds(valueOptions(field('TEXT', { defaultValue: "'x'" }), 'sqlite', true, 'y'))).toContain('default');
+    // Postgres can SET col = DEFAULT in an UPDATE, like MySQL
+    expect(kinds(valueOptions(field('text', { defaultValue: "'x'::text" }), 'postgres', false, 'y'))).toContain('default');
   });
 });

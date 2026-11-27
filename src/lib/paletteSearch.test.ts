@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { columnHits, score } from './paletteSearch';
+import { columnHits, score, tableHits } from './paletteSearch';
 
 it('ranks same text, prefix, contains, then letters in order', () => {
   expect(score('orders', 'orders')).toBe(0);
@@ -19,4 +19,11 @@ it('finds which tables have a column, best matches first', () => {
   // one letter or a fuzzy match is not enough
   expect(columnHits(cols, 'u')).toEqual([]);
   expect(columnHits(cols, 'cfg')).toEqual([]);
+});
+
+it('finds tables of every schema, by the whole key or the table part', () => {
+  const keys = ['orders', 'billing.invoices', 'invoice_lines', 'sales.leads'];
+  expect(tableHits(keys, 'inv')).toEqual(['invoice_lines', 'billing.invoices']);
+  expect(tableHits(keys, 'billing.inv')).toEqual(['billing.invoices']);
+  expect(tableHits(keys, 'zzz')).toEqual([]);
 });

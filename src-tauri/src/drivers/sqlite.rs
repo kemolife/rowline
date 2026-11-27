@@ -222,7 +222,7 @@ impl SqliteSession {
 
     /// Most common values of a column (filter suggestions)
     pub async fn common_values(&self, table: &str, column: &str, limit: usize) -> AppResult<Vec<Value>> {
-        let sql = sqlgen::common_values_sql(Dialect::Sqlite, None, table, column, limit);
+        let sql = sqlgen::common_values_sql(Dialect::Sqlite, None, None, table, column, limit);
         self.with_conn(move |c| Ok(run_query(c, &sql, &[], limit)?.rows.into_iter().filter_map(|r| r.into_iter().next()).collect()))
             .await
     }
@@ -325,7 +325,7 @@ impl SqliteSession {
     }
 
     pub async fn apply_changes(&self, table: String, changes: ChangeSet) -> AppResult<u64> {
-        let statements = sqlgen::change_set_statements(Dialect::Sqlite, None, &table, &changes)?;
+        let statements = sqlgen::change_set_statements(Dialect::Sqlite, None, None, &table, &changes, &Default::default())?;
         self.with_conn(move |c| {
             let tx = c.transaction()?;
             let mut total = 0u64;
@@ -481,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn pages_count_and_value_types() {
         let (_d, s) = test_db().await;
-        let req = PageRequest { database: None, table: "customers".into(), filter: None, sort: vec![SortSpec { column: "id".into(), descending: false }], limit: 2, offset: 0 };
+        let req = PageRequest { database: None, schema: None, table: "customers".into(), filter: None, sort: vec![SortSpec { column: "id".into(), descending: false }], limit: 2, offset: 0 };
         let page = s.select_page(req.clone()).await.unwrap();
         assert_eq!(page.rows.len(), 2);
         assert!(page.truncated);

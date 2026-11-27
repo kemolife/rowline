@@ -5,6 +5,7 @@ import { useDismiss } from '../lib/useDismiss';
 import type { DbObject } from '../lib/types';
 import { cx, formatCount } from '../lib/ui';
 import { groupByPrefix, middleTruncate } from '../lib/columns';
+import { isServer, quoteIdent } from '../lib/engine';
 import { tableKey, useApp, wsActiveTab } from '../store/app';
 import { useWs, useWsActions } from '../store/workspace';
 import DiagramPane from './DiagramPane';
@@ -14,8 +15,8 @@ import SavedQueriesPane from './SavedQueriesPane';
 function ItemsPane() {
   const session = useWs((w) => w.session);
   const tab = useWs(wsActiveTab);
-  const { selectDatabase, refreshObjects, openTable, openQuery, togglePin } = useWsActions();
-  const key = tableKey(session.connectionId, session.database);
+  const { selectDatabase, setSchema, refreshObjects, openTable, openQuery, togglePin } = useWsActions();
+  const key = tableKey(session.connectionId, session.database, session.schema);
   const pinned = useApp((s) => s.pinned[key]) ?? EMPTY;
   const recent = useApp((s) => s.recent[key]) ?? EMPTY;
   const [filter, setFilter] = useState('');
@@ -25,8 +26,11 @@ function ItemsPane() {
   const closeMenu = useCallback(() => setMenu(null), []);
   useDismiss(menuRef, closeMenu, !!menu);
 
-  const activeName = tab?.kind === 'table' ? tab.table : null;
-  const q = (name: string) => (session.config.engine === 'mysql' ? `\`${name}\`` : `"${name}"`);
+  // a tab of another schema does not mark the same name in this one
+  const activeName = tab?.kind === 'table' && (tab.schema ?? null) === session.schema ? tab.table : null;
+  const engine = session.config.engine;
+  // Postgres: SELECT of a table outside `public` names its schema (the editor's search_path has the sidebar schema first, but be exact)
+  const q = (name: string) => (engine === 'postgres' && session.schema && session.schema !== 'public' ? `${quoteIdent(engine, session.schema)}.${quoteIdent(engine, name)}` : quoteIdent(engine, name));
   const byName = useMemo(() => new Map(session.objects.map((o) => [o.name, o])), [session.objects]);
   const query = filter.trim().toLowerCase();
 
@@ -97,7 +101,7 @@ function ItemsPane() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" onClick={() => setMenu(null)}>
       <div className="space-y-2 p-2.5">
-        {session.config.engine === 'mysql' && (
+        {isServer(engine) && (
           <div className="relative">
             <select
               className="field h-8 appearance-none pr-8 font-medium"
@@ -110,6 +114,26 @@ function ItemsPane() {
               {session.databases.map((d) => (
                 <option key={d} value={d}>
                   {d}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
+          </div>
+        )}
+        {/* Postgres: one schema at a time; hidden when there is nothing to choose */}
+        {engine === 'postgres' && session.schemas.length > 1 && (
+          <div className="relative">
+            <select
+              className="field h-8 appearance-none pr-8"
+              value={session.schema ?? ''}
+              onChange={(e) => setSchema(e.target.value)}
+              aria-label="Schema"
+              title="Schema"
+              data-testid="schema-picker"
+            >
+              {session.schemas.map((sc) => (
+                <option key={sc} value={sc}>
+                  {sc}
                 </option>
               ))}
             </select>
@@ -144,7 +168,7 @@ function ItemsPane() {
           <div className="flex items-center gap-2 px-2 py-3 text-ink-3">
             <Loader2 size={14} className="animate-spin" /> Loading…
           </div>
-        ) : session.config.engine === 'mysql' && !session.database ? (
+        ) : isServer(engine) && !session.database ? (
           <div className="px-2 py-3 text-ink-3">Select a database above.</div>
         ) : query ? (
           <Section title="Matches" count={matches.length}>

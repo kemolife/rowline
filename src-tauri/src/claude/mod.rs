@@ -28,7 +28,7 @@ impl McpEndpoint {
     }
 }
 
-/// A connection a chat may use, with the database selected in uDB (MySQL)
+/// A connection a chat may use, with the database selected in uDB (MySQL, Postgres)
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatConnection {

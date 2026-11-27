@@ -16,6 +16,9 @@ const DEFAULT_MAX_ROWS: usize = 5_000;
 struct ObjectsArgs {
     id: String,
     database: Option<String>,
+    /// Postgres schema (None = server default, `public`); MySQL and SQLite ignore it
+    #[serde(default)]
+    schema: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -23,6 +26,8 @@ struct ObjectsArgs {
 struct TableArgs {
     id: String,
     database: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
     table: String,
 }
 
@@ -31,6 +36,8 @@ struct TableArgs {
 struct ValuesArgs {
     id: String,
     database: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
     table: String,
     column: String,
 }
@@ -47,6 +54,9 @@ struct PageArgs {
     /// tab that runs the query (Cancel there stops only its queries)
     #[serde(default)]
     owner: Option<String>,
+    /// the tab unlocked writes on a prod Postgres connection (only the app's UI sends it)
+    #[serde(default)]
+    unlocked: bool,
 }
 
 #[derive(Deserialize)]
@@ -54,10 +64,14 @@ struct PageArgs {
 struct ExecuteArgs {
     id: String,
     database: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
     sql: String,
     max_rows: Option<usize>,
     #[serde(default)]
     owner: Option<String>,
+    #[serde(default)]
+    unlocked: bool,
 }
 
 #[derive(Deserialize)]
@@ -73,11 +87,23 @@ struct CancelArgs {
 struct ChangesArgs {
     id: String,
     database: Option<String>,
+    #[serde(default)]
+    schema: Option<String>,
     table: String,
     changes: ChangeSet,
+    #[serde(default)]
+    unlocked: bool,
 }
 
-pub(super) const COMMANDS: &[&str] = &["list_databases", "list_objects", "schema_columns", "table_structure", "select_page", "count_rows", "execute_sql", "preview_changes", "apply_changes", "cancel_query", "common_values"];
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemasArgs {
+    id: String,
+    #[serde(default)]
+    database: Option<String>,
+}
+
+pub(super) const COMMANDS: &[&str] = &["list_databases", "list_schemas", "list_objects", "schema_columns", "table_structure", "select_page", "count_rows", "execute_sql", "preview_changes", "apply_changes", "cancel_query", "common_values"];
 
 pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResult<Value> {
     match command {
@@ -85,9 +111,13 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             let a: IdArgs = parse(args)?;
             ok(state.manager.get(&a.id).await?.databases().await?)
         }
+        "list_schemas" => {
+            let a: SchemasArgs = parse(args)?;
+            ok(state.manager.get(&a.id).await?.schemas(a.database.as_deref()).await?)
+        }
         "list_objects" => {
             let a: ObjectsArgs = parse(args)?;
-            ok(state.manager.get(&a.id).await?.objects(a.database.as_deref()).await?)
+            ok(state.manager.get(&a.id).await?.objects(a.database.as_deref(), a.schema.as_deref()).await?)
         }
         "schema_columns" => {
             let a: ObjectsArgs = parse(args)?;
@@ -96,17 +126,17 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         }
         "table_structure" => {
             let a: TableArgs = parse(args)?;
-            ok(state.manager.get(&a.id).await?.structure(a.database.as_deref(), &a.table).await?)
+            ok(state.manager.get(&a.id).await?.structure(a.database.as_deref(), a.schema.as_deref(), &a.table).await?)
         }
         "select_page" => {
             let a: PageArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            ok(crate::owner::scope(a.owner, session.select_page(a.request)).await?)
+            ok(crate::owner::scope(a.owner, session.select_page(a.request, a.unlocked)).await?)
         }
         "common_values" => {
             let a: ValuesArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            let values = tokio::time::timeout(SUGGEST_TIMEOUT, session.common_values(a.database.as_deref(), &a.table, &a.column, SUGGEST_LIMIT))
+            let values = tokio::time::timeout(SUGGEST_TIMEOUT, session.common_values(a.database.as_deref(), a.schema.as_deref(), &a.table, &a.column, SUGGEST_LIMIT))
                 .await
                 .unwrap_or(Ok(Vec::new()))?;
             ok(values)
@@ -114,13 +144,13 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "count_rows" => {
             let a: PageArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            ok(crate::owner::scope(a.owner, session.count(a.request)).await?)
+            ok(crate::owner::scope(a.owner, session.count(a.request, a.unlocked)).await?)
         }
         "execute_sql" => {
             let a: ExecuteArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
             let started = std::time::Instant::now();
-            let res = crate::owner::scope(a.owner.clone(), session.execute(a.database.as_deref(), &a.sql, a.max_rows.unwrap_or(DEFAULT_MAX_ROWS))).await;
+            let res = crate::owner::scope(a.owner.clone(), session.execute(a.database.as_deref(), a.schema.as_deref(), &a.sql, a.max_rows.unwrap_or(DEFAULT_MAX_ROWS), a.unlocked)).await;
             let _ = state.store.add_history(HistoryEntry {
                 id: uuid::Uuid::new_v4().to_string(),
                 connection_id: a.id.clone(),
@@ -139,16 +169,18 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
         "preview_changes" => {
             let a: ChangesArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
-            let db = match &*session {
-                Session::Mysql(_) => a.database.as_deref(),
-                Session::Sqlite(_) => None,
+            let (db, schema) = match &*session {
+                Session::Mysql(_) => (a.database.as_deref(), None),
+                // Postgres never names the database in SQL; the schema qualifies the table
+                Session::Postgres(_) => (None, a.schema.as_deref()),
+                Session::Sqlite(_) => (None, None),
             };
-            let statements = sqlgen::change_set_statements(session.dialect(), db, &a.table, &a.changes)?;
+            let statements = sqlgen::change_set_statements(session.dialect(), db, schema, &a.table, &a.changes, &Default::default())?;
             ok(statements.iter().map(sqlgen::preview_sql).collect::<Vec<_>>())
         }
         "apply_changes" => {
             let a: ChangesArgs = parse(args)?;
-            ok(state.manager.get(&a.id).await?.apply_changes(a.database.as_deref(), &a.table, a.changes).await?)
+            ok(state.manager.get(&a.id).await?.apply_changes(a.database.as_deref(), a.schema.as_deref(), &a.table, a.changes, a.unlocked).await?)
         }
         "cancel_query" => {
             let a: CancelArgs = parse(args)?;

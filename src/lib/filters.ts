@@ -1,3 +1,4 @@
+import { quoteIdent } from './engine';
 import { isSqlExpr, type Cell, type Engine } from './types';
 
 /** Column filters of a table tab ("chips"), turned into the WHERE clause the backend runs. */
@@ -47,11 +48,9 @@ export function newRule(column: string, op: FilterOp = '=', value = ''): FilterR
   return { id: `f${Date.now().toString(36)}${++ruleSeq}`, enabled: true, column, op, value };
 }
 
-export function quoteIdent(engine: Engine, name: string): string {
-  return engine === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : `"${name.replace(/"/g, '""')}"`;
-}
+export { quoteIdent };
 
-/** A string literal; MySQL also treats backslash as an escape character in strings. */
+/** A string literal; MySQL also treats backslash as an escape character in strings (Postgres and SQLite don't). */
 export function stringLiteral(engine: Engine, s: string): string {
   const body = engine === 'mysql' ? s.replace(/\\/g, '\\\\').replace(/'/g, "''") : s.replace(/'/g, "''");
   return `'${body}'`;
@@ -61,17 +60,21 @@ export function stringLiteral(engine: Engine, s: string): string {
 export function cellLiteral(engine: Engine, v: Cell): string {
   if (v === null) return 'NULL';
   if (typeof v === 'number') return String(v);
-  if (typeof v === 'boolean') return v ? '1' : '0';
+  if (typeof v === 'boolean') return engine === 'postgres' ? (v ? 'TRUE' : 'FALSE') : v ? '1' : '0';
   if (isSqlExpr(v)) return v.$expr;
   return stringLiteral(engine, v);
 }
 
 const NUMERIC_TYPE = /int|decimal|numeric|float|double|real|year|bit|bool|serial/i;
 const NUMBER = /^-?\d+(\.\d+)?$/;
+/** Postgres column types that LIKE takes without a cast */
+const PG_TEXT_TYPE = /^\s*(text|character varying|varchar|character|char|bpchar|citext|name)\b/i;
 
 /** Value literal: numbers stay unquoted in numeric columns, everything else is a quoted string. */
 function valueLiteral(engine: Engine, value: string, columnType: string | undefined): string {
   const v = value.trim();
+  // Postgres has no boolean = integer: a quoted '1' / 'true' works for a boolean column
+  if (engine === 'postgres' && columnType && /bool/i.test(columnType)) return stringLiteral(engine, value);
   if (columnType && NUMERIC_TYPE.test(columnType) && NUMBER.test(v)) return v;
   return stringLiteral(engine, value);
 }
@@ -87,6 +90,11 @@ export function ruleCondition(rule: FilterRule, engine: Engine, columnTypes: Rec
   if (rule.column === RAW_SQL) return rule.value.trim() || null;
   const col = quoteIdent(engine, rule.column);
   const type = columnTypes[rule.column];
+  // Postgres: text matching needs a text column (`::text` for numbers, dates, uuid…), and "contains" & co. ignore case
+  // like MySQL's default collation does (ILIKE)
+  const pg = engine === 'postgres';
+  const textCol = pg && !(type && PG_TEXT_TYPE.test(type)) ? `${col}::text` : col;
+  const like = pg ? 'ILIKE' : 'LIKE';
   const lit = (v: string) => valueLiteral(engine, v, type);
   const list = (v: string) =>
     v
@@ -99,20 +107,20 @@ export function ruleCondition(rule: FilterRule, engine: Engine, columnTypes: Rec
     case 'IS NOT NULL':
       return `${col} ${rule.op}`;
     case 'is empty':
-      return `(${col} IS NULL OR ${col} = '')`;
+      return `(${col} IS NULL OR ${textCol} = '')`;
     case 'is not empty':
-      return `(${col} IS NOT NULL AND ${col} <> '')`;
+      return `(${col} IS NOT NULL AND ${textCol} <> '')`;
     case 'contains':
-      return `${col} LIKE ${likePattern(engine, rule.value, '%', '%')}`;
+      return `${textCol} ${like} ${likePattern(engine, rule.value, '%', '%')}`;
     case 'not contains':
-      return `${col} NOT LIKE ${likePattern(engine, rule.value, '%', '%')}`;
+      return `${textCol} NOT ${like} ${likePattern(engine, rule.value, '%', '%')}`;
     case 'starts with':
-      return `${col} LIKE ${likePattern(engine, rule.value, '', '%')}`;
+      return `${textCol} ${like} ${likePattern(engine, rule.value, '', '%')}`;
     case 'ends with':
-      return `${col} LIKE ${likePattern(engine, rule.value, '%', '')}`;
+      return `${textCol} ${like} ${likePattern(engine, rule.value, '%', '')}`;
     case 'LIKE':
     case 'NOT LIKE':
-      return `${col} ${rule.op} ${stringLiteral(engine, rule.value)}`;
+      return `${textCol} ${rule.op} ${stringLiteral(engine, rule.value)}`;
     case 'IN':
     case 'NOT IN': {
       const items = list(rule.value);

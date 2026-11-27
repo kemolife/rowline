@@ -14,4 +14,12 @@ describe('filter completions', () => {
     expect(items[1]).toMatchObject({ label: 'name', apply: 'name' });
     expect(items.map((i) => i.label)).toEqual(expect.arrayContaining(['IS NULL', 'LIKE', 'IN ()', 'NOW()']));
   });
+
+  it('Postgres: quotes names that are not all lower case (they would fold to lower case)', () => {
+    expect(columnIdent('client_id', 'postgres')).toBe('client_id');
+    expect(columnIdent('ClientId', 'postgres')).toBe('"ClientId"');
+    expect(columnIdent('a.b', 'postgres')).toBe('"a.b"');
+    expect(columnIdent('order', 'postgres')).toBe('"order"');
+    expect(columnIdent('ClientId', 'mysql')).toBe('ClientId');
+  });
 });

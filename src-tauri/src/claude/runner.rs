@@ -107,6 +107,8 @@ pub async fn send(state: &AppState, chat_id: &str, text: &str) -> AppResult<()> 
     }
 }
 
+// the error is the chat event to show; built once per message, so its size does not matter
+#[allow(clippy::result_large_err)]
 fn spawn(state: &AppState, chat_id: &str, chat: &ChatConfig, runner: &mut ChatRunner, bin: Option<PathBuf>) -> Result<(), ChatEvent> {
     let endpoint = state.claude.endpoint.get().ok_or_else(|| error("internal", "Claude tools are not ready yet. Try again in a moment."))?;
     let bin = bin.ok_or_else(|| error("not_installed", "Claude Code is not installed. Install it, run `claude` once in Terminal and log in, then try again."))?;

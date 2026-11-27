@@ -12,6 +12,19 @@ use crate::sqlgen;
 #[serde(rename_all = "camelCase")]
 struct SqlArgs {
     sql: String,
+    /// the connection's engine: its lexer rules; absent = MySQL rules (as before)
+    #[serde(default)]
+    engine: Option<Engine>,
+}
+
+impl SqlArgs {
+    fn dialect(&self) -> sqlgen::Dialect {
+        match self.engine {
+            Some(Engine::Postgres) => sqlgen::Dialect::Postgres,
+            Some(Engine::Sqlite) => sqlgen::Dialect::Sqlite,
+            _ => sqlgen::Dialect::Mysql,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -38,11 +51,11 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
     match command {
         "split_statements" => {
             let a: SqlArgs = parse(args)?;
-            ok(sqlgen::split_statements(&a.sql))
+            ok(sqlgen::split_statements_for(&a.sql, a.dialect()))
         }
         "is_read_only" => {
             let a: SqlArgs = parse(args)?;
-            ok(sqlgen::split_statements(&a.sql).iter().all(|s| sqlgen::is_read_only_statement(&s.text)))
+            ok(sqlgen::split_statements_for(&a.sql, a.dialect()).iter().all(|s| sqlgen::is_read_only_statement(&s.text)))
         }
         "list_saved_queries" => {
             let a: HistoryArgs = parse(args)?;
@@ -93,5 +106,21 @@ mod tests {
         assert_eq!(list[0]["sql"], "SELECT 2");
         dispatch(&state, "delete_saved_query", json!({ "id": id })).await.unwrap();
         assert_eq!(dispatch(&state, "list_saved_queries", json!({ "connectionId": "c1" })).await.unwrap(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn split_and_read_only_follow_the_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(Store::new(dir.path().join("cfg"), SecretStore::file(dir.path().join("s.json"))).unwrap());
+        let sql = "select 'C:\\'; delete from t";
+        // no engine: MySQL rules, as before
+        assert_eq!(dispatch(&state, "split_statements", json!({ "sql": sql })).await.unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(dispatch(&state, "split_statements", json!({ "sql": sql, "engine": "mysql" })).await.unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(dispatch(&state, "split_statements", json!({ "sql": sql, "engine": "postgres" })).await.unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": sql, "engine": "postgres" })).await.unwrap(), json!(false));
+        let hidden = "--x\rCOMMIT\nWORK; select 1";
+        assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": hidden, "engine": "postgres" })).await.unwrap(), json!(false));
+        let hidden = "--x\rdelete from t\nselect 1";
+        assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": hidden, "engine": "postgres" })).await.unwrap(), json!(false));
     }
 }
