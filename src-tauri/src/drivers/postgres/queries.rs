@@ -347,7 +347,22 @@ async fn column_types(c: &Client, schema: Option<&str>, table: &str) -> AppResul
     if rows.is_empty() {
         return Err(AppError::msg(format!("Table not found: {target}")));
     }
-    Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
+    Ok(rows.into_iter().map(|r| (r.get(0), cast_type(r.get(1)))).collect())
+}
+
+/// A type name for `$n::type` that keeps the value as it is. Without a modifier `character` means char(1)
+/// and `bit` means bit(1), so the cast would cut the value (and a key could match another row): those
+/// become `bpchar` / `bit varying`, and the column's own length is checked when the value is stored.
+fn cast_type(t: String) -> String {
+    let (base, arrays) = match t.find('[') {
+        Some(i) => t.split_at(i),
+        None => (t.as_str(), ""),
+    };
+    match base {
+        "character" => format!("bpchar{arrays}"),
+        "bit" => format!("bit varying{arrays}"),
+        _ => t,
+    }
 }
 
 /// bytea is shown cut (`\x…`) in the grid: writing that text back or matching rows by it would be wrong.
@@ -561,6 +576,44 @@ mod tests {
         let del: ChangeSet = serde_json::from_value(json!({ "deletes": [{ "id": 2 }] })).unwrap();
         assert_eq!(s.apply_changes(None, None, t, del, false).await.unwrap(), 1);
         s.execute(None, None, &format!("DROP TABLE {t}"), 1, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn char_and_bit_columns_keep_their_length() {
+        let Some(s) = session(false).await else { return };
+        let t = "rowline_pg_char";
+        s.execute(None, None, &format!(
+            "DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (code char(3) PRIMARY KEY, n int, mask bit(4), codes char(2)[], var bit varying(8));
+             INSERT INTO {t} (code, n) VALUES ('abc', 0), ('abd', 0)"
+        ), 10, false).await.unwrap();
+        // `$1::character` would be char(1): 'abd' cut to 'a' and the WHERE matching the wrong row
+        let changes: ChangeSet = serde_json::from_value(json!({
+            "updates": [{ "key": {"code": "abd"}, "values": {"n": 1, "mask": "1010", "codes": "{xy,z}", "var": "101"} }],
+            "inserts": [{ "code": "xyz", "n": 2, "mask": "0001" }]
+        })).unwrap();
+        assert_eq!(s.apply_changes(None, None, t, changes, false).await.unwrap(), 2);
+        let r = s.execute(None, None, &format!("SELECT code, n, mask::text, codes::text, var::text FROM {t} ORDER BY code"), 10, false).await.unwrap();
+        assert_eq!(r[0].rows, vec![
+            vec![json!("abc"), json!(0), json!(null), json!(null), json!(null)],
+            vec![json!("abd"), json!(1), json!("1010"), json!("{xy,\"z \"}"), json!("101")],
+            vec![json!("xyz"), json!(2), json!("0001"), json!(null), json!(null)],
+        ]);
+        // too long for char(3) / wrong length for bit(4): an error, never cut
+        let long: ChangeSet = serde_json::from_value(json!({ "updates": [{ "key": {"code": "abc"}, "values": {"mask": "10101"} }] })).unwrap();
+        assert!(s.apply_changes(None, None, t, long, false).await.unwrap_err().to_string().contains("22026"));
+        let long: ChangeSet = serde_json::from_value(json!({ "inserts": [{ "code": "abcd", "n": 3 }] })).unwrap();
+        assert!(s.apply_changes(None, None, t, long, false).await.unwrap_err().to_string().contains("22001"));
+        s.execute(None, None, &format!("DROP TABLE {t}"), 1, false).await.unwrap();
+    }
+
+    #[test]
+    fn modifier_sensitive_types_get_a_cast_without_a_length() {
+        for (from, to) in [("character", "bpchar"), ("character[]", "bpchar[]"), ("bit", "bit varying"), ("bit[]", "bit varying[]")] {
+            assert_eq!(cast_type(from.into()), to);
+        }
+        for same in ["character varying", "numeric", "integer[]", "timestamp with time zone", "\"char\"", "public.character"] {
+            assert_eq!(cast_type(same.into()), same);
+        }
     }
 
     #[tokio::test]
