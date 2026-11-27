@@ -3,7 +3,8 @@ import { Bookmark, Code2, Columns3, Database, Eye, LogOut, Moon, Palette, PanelL
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../lib/api';
-import { columnHits, score } from '../lib/paletteSearch';
+import { isServer, splitTableKey } from '../lib/engine';
+import { columnHits, score, tableHits } from '../lib/paletteSearch';
 import { MOD, cx } from '../lib/ui';
 import { tableKey, useApp } from '../store/app';
 import { useQueries } from '../store/queries';
@@ -52,21 +53,34 @@ export default function CommandPalette() {
   }, [cid, session.database]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = useMemo<Item[]>(() => {
-    const kindOf = new Map(session.objects.map((o) => [o.name, o.kind]));
+    const pg = session.config.engine === 'postgres';
+    const sidebarSchema = session.schema ?? 'public';
+    // Postgres: `schema_columns` keys name the schema outside `public` (`billing.invoices`); the sidebar's own
+    // tables are known by their plain name
+    const where = (key: string) => (pg ? splitTableKey(key, 'public', session.schemas) : null);
+    const keyOf = (name: string) => (pg && sidebarSchema !== 'public' ? `${sidebarSchema}.${name}` : name);
+    const kindOf = new Map(session.objects.map((o) => [keyOf(o.name), o.kind]));
+    /** opens a table by its key; Postgres also switches the sidebar to its schema */
+    const open = (key: string, view?: 'data' | 'structure') => {
+      const at = where(key);
+      if (!at) return s.openTable(cid, key, kindOf.get(key) ?? 'table', view);
+      if (at.schema !== session.schema) s.setSchema(cid, at.schema);
+      s.openTable(cid, at.table, kindOf.get(key) ?? 'table', view, { schema: at.schema });
+    };
     const table = (name: string, group: string): Item => ({
       id: `${group}:${name}`,
       label: name,
       hint: kindOf.get(name) === 'view' ? 'View' : 'Table',
       icon: kindOf.get(name) === 'view' ? <Eye size={14} /> : <Table2 size={14} />,
-      run: () => s.openTable(cid, name, kindOf.get(name) ?? 'table'),
+      run: () => open(name),
       group,
     });
     const structure: Item[] = session.objects.map((o) => ({
-      id: `struct:${o.name}`,
-      label: `${o.name} — structure`,
+      id: `struct:${keyOf(o.name)}`,
+      label: `${keyOf(o.name)} — structure`,
       hint: 'Structure',
       icon: <Table2 size={14} />,
-      run: () => s.openTable(cid, o.name, o.kind, 'structure'),
+      run: () => open(keyOf(o.name), 'structure'),
       group: 'Tables',
     }));
     const current = (yes: boolean) => (yes ? 'Current' : undefined);
@@ -92,31 +106,34 @@ export default function CommandPalette() {
       { id: 'a:warm', label: 'Style: Warm (beige and terracotta)', hint: current(s.colorStyle === 'warm'), icon: <Palette size={14} />, run: () => s.setColorStyle('warm'), group: 'Settings' },
       { id: 'a:cli', label: 'Install the udb command (read-only queries for agents)', icon: <Terminal size={14} />, run: installCli, group: 'Settings' },
       ...session.databases
-        .filter((d) => d !== session.database && session.config.engine === 'mysql')
+        .filter((d) => d !== session.database && isServer(session.config.engine))
         .map((d) => ({ id: `db:${d}`, label: `Switch database: ${d}`, hint: 'Database', icon: <Search size={14} />, run: () => s.selectDatabase(cid, d), group: 'Databases' })),
     ];
     const needle = q.trim();
     if (!needle) {
-      const recent = (s.recent[tableKey(cid, session.database)] ?? []).filter((n) => kindOf.has(n)).map((n) => table(n, 'Recent'));
+      const recent = (s.recent[tableKey(cid, session.database, session.schema)] ?? []).map(keyOf).filter((n) => kindOf.has(n)).map((n) => table(n, 'Recent'));
       const seen = new Set(recent.map((r) => r.label));
-      const tables = session.objects.filter((o) => !seen.has(o.name)).slice(0, 30).map((o) => table(o.name, 'Tables'));
+      const tables = session.objects.map((o) => keyOf(o.name)).filter((k) => !seen.has(k)).slice(0, 30).map((k) => table(k, 'Tables'));
       return [...recent, ...actions.filter((a) => a.group !== 'Databases'), ...tables];
     }
-    const ranked = (list: Item[], text: (it: Item) => string, max: number) =>
+    // `alt`: a second text that may match better (Postgres: the table part of `billing.invoices`)
+    const ranked = (list: Item[], text: (it: Item) => string, max: number, alt?: (it: Item) => string) =>
       list
-        .map((it) => ({ it, sc: score(text(it), needle) }))
+        .map((it) => ({ it, sc: Math.min(score(text(it), needle), alt ? score(alt(it), needle) : 99) }))
         .filter((x) => x.sc < 99)
         .sort((a, b) => a.sc - b.sc || a.it.label.length - b.it.label.length)
         .slice(0, max)
         .map((x) => x.it);
-    const tables = ranked([...session.objects.map((o) => table(o.name, 'Tables')), ...structure], (it) => it.label, 15);
+    // Postgres: tables of every schema (keys of the column lists), the sidebar's own first when they tie
+    const allTables = pg ? [...new Set([...session.objects.map((o) => keyOf(o.name)), ...tableHits(Object.keys(columns), needle, 40)])] : session.objects.map((o) => o.name);
+    const tables = ranked([...allTables.map((k) => table(k, 'Tables')), ...structure], (it) => it.label, 15, pg ? (it) => it.label.slice(it.label.indexOf('.') + 1) : undefined);
     const cols: Item[] = columnHits(columns, needle).map((h) => ({
       id: `col:${h.table}.${h.column}`,
       label: h.column,
       prefix: `${h.table}.`,
       hint: 'Column',
       icon: <Columns3 size={14} />,
-      run: () => s.openTable(cid, h.table, kindOf.get(h.table) ?? 'table'),
+      run: () => open(h.table),
       group: 'Columns',
     }));
     const queries: Item[] = ranked(

@@ -1,4 +1,4 @@
-import type { ConnectionConfig, DbObject, Engine } from './types';
+import type { ConnectionConfig, DbObject, Engine, QueryResult } from './types';
 
 /** MySQL and PostgreSQL: a server with host, port, user, databases (SQLite is a file) */
 export function isServer(e: Engine): boolean {
@@ -45,4 +45,43 @@ export async function pickSchema(schemas: string[], objectsOf: (schema: string) 
   }
   const first = schemas[0] ?? null;
   return { schema: first, objects: first ? (seen[first] ?? []) : [] };
+}
+
+/** Tab and header name of a table: `invoices` in `public` (or without a schema), `billing.invoices` otherwise */
+export function tableTitle(table: string, schema: string | null | undefined): string {
+  return schema && schema !== 'public' ? `${schema}.${table}` : table;
+}
+
+/**
+ * Schema and table of a name that may carry a schema: a `schema_columns` key (`billing.invoices`) or a foreign key
+ * target in another schema (`public.Orders`). The prefix counts only when it is another known schema, so a table
+ * whose own name has a dot stays whole.
+ */
+export function splitTableKey(key: string, ownSchema: string, schemas: string[]): { schema: string; table: string } {
+  const dot = key.indexOf('.');
+  if (dot > 0) {
+    const prefix = key.slice(0, dot);
+    if (prefix !== ownSchema && schemas.includes(prefix)) return { schema: prefix, table: key.slice(dot + 1) };
+  }
+  return { schema: ownSchema, table: key };
+}
+
+/**
+ * Key of data kept per database, and per schema on Postgres (diagram cache, snapshots, virtual keys, pins):
+ * `shop/billing`. Without a schema (MySQL, SQLite) it is the database itself, so their saved data keeps its key.
+ */
+export function scopeKey(database: string | null, schema: string | null | undefined): string | null {
+  return schema ? `${database ?? ''}/${schema}` : database;
+}
+
+/** Text of the "Unlock writes" confirmation on a prod Postgres tab */
+export function unlockQuestion(connection: string, database: string | null): string {
+  return `Allow changes to ${connection} / ${database ?? 'the database'} in this tab? Other tabs, Claude and udb stay read-only.`;
+}
+
+/** Postgres runs a script in one transaction: when a statement fails, the ones before it are rolled back too */
+export function rollbackNote(engine: Engine, results: QueryResult[]): string | null {
+  if (engine !== 'postgres') return null;
+  const failed = results.findIndex((r) => r.error);
+  return failed > 0 ? 'PostgreSQL runs the script in one transaction: the earlier statements of this run were rolled back.' : null;
 }

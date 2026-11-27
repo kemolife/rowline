@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { api, confirmDialog } from '../lib/api';
 import type { FilterRule } from '../lib/filters';
 import { useMemo } from 'react';
-import { isServer, pickSchema } from '../lib/engine';
+import { isServer, pickSchema, scopeKey } from '../lib/engine';
 import { effectiveProjects, insertGrouped, type ProjectInfo } from '../lib/projects';
 import type { ConnectionConfig, ConnectionInput, DbObject, ObjectKind, ServerInfo, SortSpec } from '../lib/types';
 
@@ -16,8 +16,10 @@ export interface TableTab {
   table: string;
   objectKind: ObjectKind;
   view: 'data' | 'structure';
-  /** database the tab belongs to (MySQL) */
+  /** database the tab belongs to (MySQL, Postgres) */
   database: string | null;
+  /** Postgres schema of the table (absent for MySQL and SQLite; null/absent = `public`) */
+  schema?: string | null;
   /** filter chips; kept with the tab so they survive a restart */
   filters?: FilterRule[];
   /** WHERE clause typed in SQL mode */
@@ -33,6 +35,8 @@ export interface TableOpenOptions {
   filters?: FilterRule[];
   /** shows the table in this tab instead of a new one */
   replaceTabId?: string;
+  /** Postgres: the schema of the table (default: the one the sidebar shows) */
+  schema?: string | null;
 }
 
 export interface QueryTab {
@@ -56,6 +60,8 @@ export interface DiagramTab {
   id: string;
   kind: 'diagram';
   database: string | null;
+  /** Postgres: the schema the diagram shows (absent for MySQL and SQLite) */
+  schema?: string | null;
   /** table to show and select when the tab opens */
   focus?: string;
 }
@@ -150,7 +156,7 @@ export interface AppState {
   /** `database`: run in this database instead of the selected one (Claude "Open in grid") */
   openQuery: (cid: string, sql?: string, opts?: QueryOpenOptions) => void;
   updateTab: (cid: string, tabId: string, patch: Partial<TableTab> | Partial<QueryTab> | Partial<DiagramTab>) => void;
-  /** Opens the relation diagram of the selected database (one tab per database) */
+  /** Opens the relation diagram of the selected database (one tab per database; Postgres: per schema) */
   openDiagram: (cid: string, focus?: string) => void;
   closeTab: (cid: string, tabId: string) => Promise<void>;
   /** Closes several tabs; asks once when some of them have unsaved changes */
@@ -213,8 +219,8 @@ function writeJson(key: string, value: unknown) {
   }
 }
 
-/** Key of per-database sidebar lists (pinned, recent) */
-export const tableKey = (cid: string, database: string | null) => `${cid}/${database ?? ''}`;
+/** Key of per-database sidebar lists (pinned, recent) and schema data; Postgres adds the schema (`id/shop/billing`) */
+export const tableKey = (cid: string, database: string | null, schema?: string | null) => `${cid}/${scopeKey(database, schema) ?? ''}`;
 
 export const useApp = create<AppState>((set, get) => {
   /** Updates one workspace; does nothing when the connection was closed meanwhile. */
@@ -451,25 +457,29 @@ export const useApp = create<AppState>((set, get) => {
     openTable: (cid, name, kind = 'table', view = 'data', opts = {}) => {
       const w = get().workspaces[cid];
       if (!w) return;
-      const key = tableKey(cid, w.session.database);
+      // Postgres tabs remember their schema; MySQL and SQLite tabs have none
+      const pg = w.session.config.engine === 'postgres';
+      const schema = pg ? (opts.schema !== undefined ? opts.schema : w.session.schema) : null;
+      const where = pg ? { schema } : {};
+      const key = tableKey(cid, w.session.database, schema);
       const recent = { ...get().recent, [key]: [name, ...(get().recent[key] ?? []).filter((t) => t !== name)].slice(0, 8) };
       set({ recent });
       writeJson('rowline.recent', recent);
       if (opts.filters || opts.replaceTabId) {
-        const tab: TableTab = { id: opts.replaceTabId ?? newTabId(), kind: 'table', table: name, objectKind: kind, view, database: w.session.database, filters: opts.filters };
+        const tab: TableTab = { id: opts.replaceTabId ?? newTabId(), kind: 'table', table: name, objectKind: kind, view, database: w.session.database, ...where, filters: opts.filters };
         patchWs(cid, (ws) => ({
           tabs: opts.replaceTabId ? ws.tabs.map((t) => (t.id === opts.replaceTabId ? tab : t)) : [...ws.tabs, tab],
           activeTabId: tab.id,
         }));
         return;
       }
-      const existing = w.tabs.find((t) => t.kind === 'table' && t.table === name && t.database === w.session.database);
+      const existing = w.tabs.find((t) => t.kind === 'table' && t.table === name && t.database === w.session.database && (t.schema ?? null) === schema);
       if (existing) {
         patchWs(cid, () => ({ activeTabId: existing.id }));
         if (existing.kind === 'table' && existing.view !== view) get().updateTab(cid, existing.id, { view });
         return;
       }
-      const tab: TableTab = { id: newTabId(), kind: 'table', table: name, objectKind: kind, view, database: w.session.database };
+      const tab: TableTab = { id: newTabId(), kind: 'table', table: name, objectKind: kind, view, database: w.session.database, ...where };
       patchWs(cid, (ws) => ({ tabs: [...ws.tabs, tab], activeTabId: tab.id }));
     },
 
@@ -500,12 +510,14 @@ export const useApp = create<AppState>((set, get) => {
     openDiagram: (cid, focus) => {
       const w = get().workspaces[cid];
       if (!w) return;
-      const existing = w.tabs.find((t) => t.kind === 'diagram' && t.database === w.session.database);
+      const pg = w.session.config.engine === 'postgres';
+      const schema = pg ? w.session.schema : null;
+      const existing = w.tabs.find((t) => t.kind === 'diagram' && t.database === w.session.database && (t.schema ?? null) === schema);
       if (existing) {
         patchWs(cid, (ws) => ({ activeTabId: existing.id, tabs: ws.tabs.map((t) => (t.id === existing.id ? { ...t, focus } : t)) }));
         return;
       }
-      const tab: DiagramTab = { id: newTabId(), kind: 'diagram', database: w.session.database, focus };
+      const tab: DiagramTab = { id: newTabId(), kind: 'diagram', database: w.session.database, ...(pg ? { schema } : {}), focus };
       patchWs(cid, (ws) => ({ tabs: [...ws.tabs, tab], activeTabId: tab.id }));
     },
 
@@ -576,7 +588,7 @@ export const useApp = create<AppState>((set, get) => {
     togglePin: (cid, table) => {
       const w = get().workspaces[cid];
       if (!w) return;
-      const key = tableKey(cid, w.session.database);
+      const key = tableKey(cid, w.session.database, w.session.schema);
       const list = get().pinned[key] ?? [];
       const pinned = { ...get().pinned, [key]: list.includes(table) ? list.filter((t) => t !== table) : [...list, table] };
       set({ pinned });

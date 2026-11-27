@@ -102,13 +102,18 @@ export default function BackupMenu() {
       {open && (
         <div className="fade-in absolute right-0 top-9 z-50 w-[300px] rounded-lg border border-line-strong bg-surface-2 p-1 text-[12.5px] shadow-[var(--shadow)]">
           <AppearanceSwitches stacked />
-          <div className="my-1 h-px bg-line" />
-          <button className={item} onClick={() => start('backup')} data-testid="backup-database">
-            <DatabaseBackup size={14} /> Backup database…
-          </button>
-          <button className={item} onClick={() => start('restore')} data-testid="restore-database">
-            <RotateCcw size={14} /> Restore database…
-          </button>
+          {/* no backup or restore for PostgreSQL yet */}
+          {engine !== 'postgres' && (
+            <>
+              <div className="my-1 h-px bg-line" />
+              <button className={item} onClick={() => start('backup')} data-testid="backup-database">
+                <DatabaseBackup size={14} /> Backup database…
+              </button>
+              <button className={item} onClick={() => start('restore')} data-testid="restore-database">
+                <RotateCcw size={14} /> Restore database…
+              </button>
+            </>
+          )}
         </div>
       )}
       {job && <JobDialog job={job} target={target} onClose={() => setJob(null)} />}

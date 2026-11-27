@@ -96,8 +96,12 @@ export const api = {
   deleteVirtualKey: (id: string) => call<null>('delete_virtual_key', { id }),
   schemaGraph: (id: string, database: string | null, schema?: string | null) => call<SchemaTable[]>('schema_graph', { id, database, schema }),
   schemaSnapshots: (id: string, database: string | null) => call<SchemaSnapshot[]>('schema_snapshots', { id, database }),
-  /** the snapshot key stays connection + database; schema picks the tables that are read (Postgres) */
-  saveSchemaSnapshot: (id: string, database: string | null, schema?: string | null) => call<SchemaSnapshot>('schema_snapshot_save', { id, database, schema }),
+  /**
+   * schema picks the tables that are read (Postgres); snapshotKey is the key it is stored under when that is not
+   * the database (Postgres `<db>/<schema>`, the same key `schemaSnapshots` then reads)
+   */
+  saveSchemaSnapshot: (id: string, database: string | null, schema?: string | null, snapshotKey?: string | null) =>
+    call<SchemaSnapshot>('schema_snapshot_save', { id, database, schema, snapshotKey }),
   splitStatements: (sql: string) => call<StatementRange[]>('split_statements', { sql }),
   isReadOnly: (sql: string) => call<boolean>('is_read_only', { sql }),
   listHistory: (connectionId?: string) => call<HistoryEntry[]>('list_history', { connectionId }),

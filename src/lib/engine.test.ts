@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultPort, defaultUser, engineLabel, isServer, pickSchema, prodLocked, quoteIdent, sqlDialectName } from './engine';
-import type { DbObject } from './types';
+import { defaultPort, defaultUser, engineLabel, isServer, pickSchema, prodLocked, quoteIdent, rollbackNote, scopeKey, splitTableKey, sqlDialectName, tableTitle, unlockQuestion } from './engine';
+import type { DbObject, QueryResult } from './types';
 
 it('knows server engines', () => {
   expect(isServer('mysql')).toBe(true);
@@ -62,5 +62,48 @@ describe('default schema', () => {
   it('falls back to the first schema, then to null', async () => {
     expect(await pickSchema(['app', 'public'], lister({}).objectsOf)).toEqual({ schema: 'app', objects: [] });
     expect(await pickSchema([], lister({}).objectsOf)).toEqual({ schema: null, objects: [] });
+  });
+});
+
+describe('schemas in names', () => {
+  it('titles a table with its schema unless it is public', () => {
+    expect(tableTitle('invoices', 'public')).toBe('invoices');
+    expect(tableTitle('invoices', null)).toBe('invoices');
+    expect(tableTitle('invoices', undefined)).toBe('invoices');
+    expect(tableTitle('invoices', 'billing')).toBe('billing.invoices');
+  });
+
+  it('splits a schema_columns key or a foreign key target into schema and table', () => {
+    const schemas = ['public', 'billing'];
+    expect(splitTableKey('billing.invoices', 'public', schemas)).toEqual({ schema: 'billing', table: 'invoices' });
+    expect(splitTableKey('invoices', 'public', schemas)).toEqual({ schema: 'public', table: 'invoices' });
+    // a dot inside a table name of the own schema stays part of the name
+    expect(splitTableKey('a.b', 'public', schemas)).toEqual({ schema: 'public', table: 'a.b' });
+    expect(splitTableKey('public.Orders', 'billing', schemas)).toEqual({ schema: 'public', table: 'Orders' });
+    expect(splitTableKey('billing.x', 'billing', schemas)).toEqual({ schema: 'billing', table: 'billing.x' });
+  });
+
+  it('keys per-schema data by database and schema; MySQL and SQLite keep the database alone', () => {
+    expect(scopeKey('shop', null)).toBe('shop');
+    expect(scopeKey(null, null)).toBeNull();
+    expect(scopeKey('shop', 'billing')).toBe('shop/billing');
+    expect(scopeKey('shop', 'public')).toBe('shop/public');
+  });
+});
+
+it('asks to unlock writes with the connection and database', () => {
+  expect(unlockQuestion('prod-db', 'shop')).toBe('Allow changes to prod-db / shop in this tab? Other tabs, Claude and udb stay read-only.');
+});
+
+describe('rollback note', () => {
+  const r = (extra: Partial<QueryResult> = {}): QueryResult => ({ columns: [], rows: [], affectedRows: 1, elapsedMs: 1, truncated: false, statement: 'x', ...extra });
+  it('says earlier statements were rolled back when a Postgres script fails after them', () => {
+    expect(rollbackNote('postgres', [r(), r({ error: 'ERROR 23505: dup' })])).toMatch(/rolled back/);
+  });
+  it('says nothing when the first statement fails, when all ran, or for MySQL and SQLite', () => {
+    expect(rollbackNote('postgres', [r({ error: 'ERROR 42P01: x' })])).toBeNull();
+    expect(rollbackNote('postgres', [r(), r()])).toBeNull();
+    expect(rollbackNote('mysql', [r(), r({ error: 'x' })])).toBeNull();
+    expect(rollbackNote('sqlite', [r(), r({ error: 'x' })])).toBeNull();
   });
 });

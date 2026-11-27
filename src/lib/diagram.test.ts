@@ -58,6 +58,12 @@ describe('diagram', () => {
     expect(text).not.toContain('Schema changes');
   });
 
+  it('names the engine and the Postgres schema in the prompt', () => {
+    const base = { question: 'Q', tables: view.slice(0, 1), relations: [], changesSince: null, projectFolder: null };
+    expect(diagramPrompt({ ...base, database: 'shop', engine: 'mysql' })).toContain('relation diagram of `shop` (MySQL):');
+    expect(diagramPrompt({ ...base, database: 'shop', schema: 'billing', engine: 'postgres' })).toContain('relation diagram of `shop`, schema `billing` (PostgreSQL):');
+  });
+
   it('offers questions that fit the selection', () => {
     expect(presetQuestions(1, false).map((q) => q.label)).toEqual(['Explain this table', 'What refers to it?', 'Write a query']);
     expect(presetQuestions(3, true).map((q) => q.label)).toContain('What changed here?');

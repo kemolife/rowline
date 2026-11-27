@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RAW_SQL, compileFilter, enumValues, newRule, ruleCondition, ruleForValue, stringLiteral, type FilterRule } from './filters';
+import { RAW_SQL, cellLiteral, compileFilter, enumValues, newRule, ruleCondition, ruleForValue, stringLiteral, type FilterRule } from './filters';
 
 const rule = (column: string, op: FilterRule['op'], value = '', extra: Partial<FilterRule> = {}): FilterRule => ({ ...newRule(column, op, value), ...extra });
 const types = { id: 'bigint unsigned', name: 'varchar(255)', price: 'decimal(10,2)' };
@@ -50,5 +50,37 @@ describe('filter rules', () => {
     expect(enumValues("enum('new','paid','it''s')")).toEqual(['new', 'paid', "it's"]);
     expect(enumValues("set('a','b')")).toEqual(['a', 'b']);
     expect(enumValues('varchar(20)')).toBeNull();
+  });
+
+  it('Postgres: quotes mixed case, contains is case-insensitive and casts non-text columns to text', () => {
+    const pg = { name: 'character varying(80)', id: 'integer', Note: 'text', active: 'boolean', created: 'timestamp with time zone' };
+    expect(ruleCondition(rule('name', 'contains', 'x'), 'postgres')).toBe(`"name"::text ILIKE '%x%' ESCAPE '!'`);
+    expect(ruleCondition(rule('name', 'contains', 'x'), 'postgres', pg)).toBe(`"name" ILIKE '%x%' ESCAPE '!'`);
+    expect(ruleCondition(rule('Note', 'not contains', 'x'), 'postgres', pg)).toBe(`"Note" NOT ILIKE '%x%' ESCAPE '!'`);
+    expect(ruleCondition(rule('id', 'starts with', '12'), 'postgres', pg)).toBe(`"id"::text ILIKE '12%' ESCAPE '!'`);
+    expect(ruleCondition(rule('created', 'ends with', '05'), 'postgres', pg)).toBe(`"created"::text ILIKE '%05' ESCAPE '!'`);
+    expect(ruleCondition(rule('id', 'LIKE', '1%'), 'postgres', pg)).toBe(`"id"::text LIKE '1%'`);
+    expect(ruleCondition(rule('id', 'is empty'), 'postgres', pg)).toBe(`("id" IS NULL OR "id"::text = '')`);
+    expect(ruleCondition(rule('Note', '=', "it's"), 'postgres', pg)).toBe(`"Note" = 'it''s'`);
+    expect(ruleCondition(rule('id', '>', '5'), 'postgres', pg)).toBe(`"id" > 5`);
+    // backslash is plain text in Postgres strings
+    expect(stringLiteral('postgres', 'a\\b')).toBe("'a\\b'");
+  });
+
+  it('Postgres: booleans from a cell filter are quoted (boolean = 1 is an error)', () => {
+    const pg = { active: 'boolean' };
+    expect(ruleCondition(ruleForValue('active', true), 'postgres', pg)).toBe(`"active" = '1'`);
+    expect(ruleCondition(ruleForValue('active', true), 'mysql', { active: 'tinyint(1)' })).toBe('`active` = 1');
+  });
+
+  it('Postgres writes booleans as TRUE / FALSE', () => {
+    expect(cellLiteral('postgres', true)).toBe('TRUE');
+    expect(cellLiteral('postgres', false)).toBe('FALSE');
+    expect(cellLiteral('mysql', true)).toBe('1');
+  });
+
+  it('MySQL and SQLite keep LIKE for contains', () => {
+    expect(ruleCondition(rule('id', 'contains', '1'), 'mysql', types)).toBe("`id` LIKE '%1%' ESCAPE '!'");
+    expect(ruleCondition(rule('id', 'is empty'), 'sqlite', types)).toBe(`("id" IS NULL OR "id" = '')`);
   });
 });

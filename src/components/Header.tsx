@@ -1,4 +1,5 @@
 import { Code2, LogOut, PanelLeft, Search, Sparkles } from 'lucide-react';
+import { tableTitle } from '../lib/engine';
 import { ENV_LABEL, MOD, cx, envColor } from '../lib/ui';
 import { useApp, useProjects, wsActiveTab } from '../store/app';
 import ProjectBadge from './ProjectBadge';
@@ -16,7 +17,7 @@ export default function Header({ trafficLightSpace }: { trafficLightSpace: boole
   const savedConfig = useApp((s) => s.connections.find((c) => c.id === session.connectionId));
   const { openQuery, disconnect } = useWsActions();
   const env = session.config.environment;
-  const object = tab?.kind === 'table' ? tab.table : tab?.kind === 'query' ? tab.title : tab?.kind === 'diagram' ? 'Relations' : null;
+  const object = tab?.kind === 'table' ? tableTitle(tab.table, tab.schema) : tab?.kind === 'query' ? tab.title : tab?.kind === 'diagram' ? 'Relations' : null;
   // a table tab stays in the database it was opened in, also after the sidebar switches to another one
   const database = session.config.engine === 'sqlite' ? session.info.currentDatabase : tab?.kind === 'table' && tab.database ? tab.database : session.database;
   // SQLite connections are often named after their file; don't show the same text twice

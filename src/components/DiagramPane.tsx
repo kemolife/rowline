@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import { nameMatcher, type Relation } from '../lib/diagram';
 import { diffSchema, hasChanges, summaryText, type TableView } from '../lib/schemaDiff';
 import { cx, formatCount, shortCount } from '../lib/ui';
+import { isServer } from '../lib/engine';
 import { tableKey } from '../store/app';
 import { useDiagramView, type DiagramOutline } from '../store/diagramView';
 import { emptySchema, useSchema } from '../store/schema';
@@ -21,14 +22,16 @@ export default function DiagramPane() {
 function useSchemaChanges() {
   const session = useWs((w) => w.session);
   const cid = session.connectionId;
-  const database = session.config.engine === 'mysql' ? session.database : null;
-  const entry = useSchema((s) => s.entries[tableKey(cid, database)]) ?? emptySchema;
+  const database = isServer(session.config.engine) ? session.database : null;
+  // Postgres: the schema the sidebar shows (diagram data and snapshots are kept per schema)
+  const schema = session.config.engine === 'postgres' ? session.schema : null;
+  const entry = useSchema((s) => s.entries[tableKey(cid, database, schema)]) ?? emptySchema;
   useEffect(() => {
-    if (session.config.engine === 'sqlite' || database) useSchema.getState().load(cid, database);
-  }, [cid, database, session.config.engine]);
+    if (session.config.engine === 'sqlite' || (database && (session.config.engine !== 'postgres' || schema))) useSchema.getState().load(cid, database, false, schema);
+  }, [cid, database, schema, session.config.engine]);
   const last = entry.snapshots[entry.snapshots.length - 1] ?? null;
   const diff = useMemo(() => (entry.live && last ? diffSchema(last.tables, entry.live) : null), [entry.live, last]);
-  return { session, cid, database, entry, last, diff, markSeen: () => useSchema.getState().markSeen(cid, database) };
+  return { session, cid, database, entry, last, diff, markSeen: () => useSchema.getState().markSeen(cid, database, schema) };
 }
 
 function Start() {
@@ -38,7 +41,7 @@ function Start() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col p-2.5" data-testid="diagram-pane">
-      <button className="btn btn-primary h-8 justify-center" onClick={() => openDiagram()} data-testid="open-diagram" disabled={session.config.engine === 'mysql' && !database}>
+      <button className="btn btn-primary h-8 justify-center" onClick={() => openDiagram()} data-testid="open-diagram" disabled={isServer(session.config.engine) && !database}>
         <Network size={14} /> Open relation diagram
       </button>
       <p className="mt-2 px-1 text-[11.5px] leading-relaxed text-ink-3">Tables and their foreign keys. Click a table to see its relations; select several to ask Claude about them.</p>

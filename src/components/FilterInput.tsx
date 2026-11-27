@@ -1,5 +1,6 @@
 import { autocompletion } from '@codemirror/autocomplete';
-import { MySQL, SQLite, sql as sqlLang } from '@codemirror/lang-sql';
+import { sql as sqlLang } from '@codemirror/lang-sql';
+import { codeMirrorDialect } from '../lib/cmDialect';
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -39,7 +40,7 @@ const FilterInput = forwardRef<FilterInputHandle, Props>(function FilterInput({ 
 
   const extensions = useMemo(
     () => [
-      sqlLang({ dialect: engine === 'mysql' ? MySQL : SQLite }),
+      sqlLang({ dialect: codeMirrorDialect(engine) }),
       autocompletion({ override: [filterCompletionSource(() => latest.current.options)], activateOnTyping: true, icons: true }),
       // single line: newlines from paste become spaces
       EditorState.transactionFilter.of((tr) => {

@@ -14,6 +14,10 @@ struct SchemaArgs {
     /// Postgres schema of the diagram (None = server default); MySQL and SQLite ignore it
     #[serde(default)]
     schema: Option<String>,
+    /// schema_snapshot_save: the key the snapshot is stored under, when it is not the database
+    /// (Postgres: `<db>/<schema>`, so two schemas never share snapshots)
+    #[serde(default)]
+    snapshot_key: Option<String>,
 }
 
 /// The diagram should never spin forever: a slow server ends with a message
@@ -51,7 +55,8 @@ pub(super) async fn run(state: &AppState, command: &str, args: Value) -> AppResu
             let a: SchemaArgs = parse(args)?;
             let session = state.manager.get(&a.id).await?;
             let tables = read_graph(&session, a.database.as_deref(), a.schema.as_deref()).await?;
-            ok(state.store.add_schema_snapshot(&a.id, a.database.as_deref(), tables)?)
+            let key = a.snapshot_key.as_deref().or(a.database.as_deref());
+            ok(state.store.add_schema_snapshot(&a.id, key, tables)?)
         }
         "list_virtual_keys" => {
             let a: KeysArgs = parse(args)?;
@@ -91,5 +96,12 @@ mod tests {
         assert_eq!(saved["tables"].as_array().unwrap().len(), graph.as_array().unwrap().len());
         let list = dispatch(&state, "schema_snapshots", json!({ "id": id })).await.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
+
+        // a snapshot key of its own (Postgres `<db>/<schema>`): stored apart from the database's snapshots
+        dispatch(&state, "schema_snapshot_save", json!({ "id": id, "snapshotKey": "main/billing" })).await.unwrap();
+        let keyed = dispatch(&state, "schema_snapshots", json!({ "id": id, "database": "main/billing" })).await.unwrap();
+        assert_eq!(keyed.as_array().unwrap().len(), 1);
+        assert_eq!(keyed[0]["database"], "main/billing");
+        assert_eq!(dispatch(&state, "schema_snapshots", json!({ "id": id })).await.unwrap().as_array().unwrap().len(), 1);
     }
 }

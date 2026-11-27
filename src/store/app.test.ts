@@ -375,6 +375,59 @@ describe('postgres schemas', () => {
   });
 });
 
+describe('postgres table tabs', () => {
+  beforeEach(async () => {
+    localStorage.clear();
+    vi.mocked(api.listSchemas).mockReset().mockResolvedValue(['public', 'billing']);
+    vi.mocked(api.listObjects).mockReset().mockImplementation(async (_id, _db, schema) => [{ name: schema === 'billing' ? 'invoices' : 'orders', kind: 'table', rowEstimate: 1 }]);
+    useApp.setState({ connections: [conn('p', 'postgres')], workspaces: {}, openOrder: [], activeConnectionId: null, launcherOpen: false, pinned: {}, recent: {} });
+    await useApp.getState().connect('p');
+  });
+  const tabs = () => useApp.getState().workspaces.p.tabs;
+
+  it('a table tab keeps the schema it was opened in', async () => {
+    useApp.getState().openTable('p', 'orders');
+    await useApp.getState().setSchema('p', 'billing');
+    useApp.getState().openTable('p', 'invoices');
+    expect(tabs()).toMatchObject([
+      { kind: 'table', table: 'orders', database: 'shop', schema: 'public' },
+      { kind: 'table', table: 'invoices', database: 'shop', schema: 'billing' },
+    ]);
+  });
+
+  it('the same table name in two schemas opens two tabs; the same schema reuses the tab', async () => {
+    useApp.getState().openTable('p', 'orders');
+    useApp.getState().openTable('p', 'orders', 'table', 'data', { schema: 'billing' });
+    useApp.getState().openTable('p', 'orders');
+    expect(tabs().map((t) => (t.kind === 'table' ? `${t.schema}.${t.table}` : ''))).toEqual(['public.orders', 'billing.orders']);
+    expect(useApp.getState().workspaces.p.activeTabId).toBe(tabs()[0].id);
+  });
+
+  it('pins and recent tables are kept per schema', async () => {
+    useApp.getState().togglePin('p', 'orders');
+    useApp.getState().openTable('p', 'orders');
+    expect(useApp.getState().pinned['p/shop/public']).toEqual(['orders']);
+    expect(useApp.getState().recent['p/shop/public']).toEqual(['orders']);
+    expect(useApp.getState().pinned['p/shop']).toBeUndefined();
+  });
+
+  it('a diagram tab belongs to one schema', async () => {
+    useApp.getState().openDiagram('p');
+    await useApp.getState().setSchema('p', 'billing');
+    useApp.getState().openDiagram('p');
+    expect(tabs()).toMatchObject([{ kind: 'diagram', schema: 'public' }, { kind: 'diagram', schema: 'billing' }]);
+  });
+
+  it('MySQL tabs have no schema and keep their keys', async () => {
+    useApp.setState({ connections: [conn('a')] });
+    await useApp.getState().connect('a');
+    useApp.getState().openTable('a', 'orders');
+    useApp.getState().togglePin('a', 'orders');
+    expect(useApp.getState().workspaces.a.tabs[0]).not.toHaveProperty('schema');
+    expect(useApp.getState().pinned['a/shop']).toEqual(['orders']);
+  });
+});
+
 describe('unlocking writes per tab', () => {
   beforeEach(async () => {
     localStorage.clear();

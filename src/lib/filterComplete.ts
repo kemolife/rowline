@@ -1,4 +1,5 @@
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import { quoteIdent } from './engine';
 import type { Engine } from './types';
 
 export interface FilterColumn {
@@ -18,8 +19,10 @@ const RESERVED = new Set(['and', 'or', 'not', 'is', 'null', 'like', 'in', 'betwe
 
 /** Column name as it should be typed in the filter: plain when safe, quoted otherwise. */
 export function columnIdent(name: string, engine: Engine): string {
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED.has(name.toLowerCase())) return name;
-  return engine === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : `"${name.replace(/"/g, '""')}"`;
+  // Postgres folds unquoted names to lower case, so `ClientId` must be quoted there
+  const plain = engine === 'postgres' ? /^[a-z_][a-z0-9_]*$/ : /^[A-Za-z_][A-Za-z0-9_]*$/;
+  if (plain.test(name) && !RESERVED.has(name.toLowerCase())) return name;
+  return quoteIdent(engine, name);
 }
 
 /** Completion items for the WHERE filter: columns first, then operators and functions. */

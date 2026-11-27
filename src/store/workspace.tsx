@@ -47,6 +47,8 @@ export function useWsActions() {
       setDirty: (tabId: string, count: number) => s().setDirty(id, tabId, count),
       selectDatabase: (db: string) => s().selectDatabase(id, db),
       refreshObjects: () => s().refreshObjects(id),
+      setSchema: (schema: string) => s().setSchema(id, schema),
+      unlockWrites: (tabId: string) => s().unlockWrites(id, tabId),
       disconnect: () => s().disconnect(id),
     };
   }, [id]);

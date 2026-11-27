@@ -1,5 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, History as HistoryIcon, Loader2, Sparkles } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { rollbackNote } from '../lib/engine';
 import { explainSqlError } from '../lib/sqlAssist';
 import { EXPORT_FORMATS, exportRows, forClaude, formatRows, guessTable, type ExportFormat } from '../lib/export';
 import type { Engine, QueryResult } from '../lib/types';
@@ -240,6 +241,11 @@ export default function ResultPanel({
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8">
           <CenteredState error={error} />
           {!run.error && result?.statement && <div className="mono -mt-6 max-w-xl truncate text-[11.5px] text-ink-3" data-testid="error-statement" title={result.statement}>{result.statement}</div>}
+          {!run.error && rollbackNote(engine, run.results) && (
+            <div className="max-w-xl text-center text-[12px] text-ink-2" data-testid="rollback-note">
+              {rollbackNote(engine, run.results)}
+            </div>
+          )}
           {explainSqlError(error, errorSql) && (
             <div className={cx('max-w-xl rounded-xl border border-line bg-surface-2 px-4 py-3 text-[12.5px] text-ink-2', run.error && '-mt-6')} data-testid="error-hint">
               <span className="font-semibold text-ink">Hint: </span>

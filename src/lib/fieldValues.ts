@@ -50,9 +50,9 @@ export function prettyJson(text: string): string | null {
 export function valueOptions(field: FieldInfo, engine: Engine, isNewRow: boolean, value: Cell): ValueOption[] {
   const out: ValueOption[] = [];
   if (field.nullable && !field.primaryKey) out.push({ kind: 'null' });
-  // SQLite can't set DEFAULT in an UPDATE; for a new row it simply leaves the column out
+  // SQLite can't set DEFAULT in an UPDATE; for a new row it simply leaves the column out (MySQL and Postgres can)
   const hasDefault = field.defaultValue != null || field.autoIncrement || field.nullable;
-  if (hasDefault && (engine === 'mysql' || isNewRow)) out.push({ kind: 'default' });
+  if (hasDefault && (engine !== 'sqlite' || isNewRow)) out.push({ kind: 'default' });
   if (isTextLike(field.type)) out.push({ kind: 'empty' });
   const now = nowKeyword(field.type);
   if (now) out.push({ kind: 'now', keyword: now });

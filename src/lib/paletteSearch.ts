@@ -38,3 +38,16 @@ export function columnHits(columns: Record<string, string[]>, needle: string, li
     .slice(0, limit)
     .map(({ table, column }) => ({ table, column }));
 }
+
+/**
+ * Tables for ⌘K from `schema_columns` keys (Postgres: `billing.invoices` outside `public`). A key matches by its whole
+ * text or by the table part, so "inv" finds `billing.invoices` as well as `invoice_lines`.
+ */
+export function tableHits(keys: string[], needle: string, limit = 15): string[] {
+  return keys
+    .map((k) => ({ k, sc: Math.min(score(k, needle), score(k.slice(k.indexOf('.') + 1), needle)) }))
+    .filter((x) => x.sc < 99)
+    .sort((a, b) => a.sc - b.sc || a.k.length - b.k.length || a.k.localeCompare(b.k))
+    .slice(0, limit)
+    .map((x) => x.k);
+}

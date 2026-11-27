@@ -19,6 +19,7 @@ import {
 import { columnMeta } from '../lib/columns';
 import { exportRows } from '../lib/export';
 import { compileFilter, ruleForValue, type FilterRule } from '../lib/filters';
+import { isServer, prodLocked, splitTableKey } from '../lib/engine';
 import { structureWithKeys } from '../lib/virtualKeys';
 import { useReferencing, useSchema, useVirtualKeys } from '../store/schema';
 import type { Relation } from '../lib/diagram';
@@ -35,22 +36,36 @@ import CellMenu from './CellMenu';
 import ColumnsMenu, { HeaderMenu, type ColumnChoice } from './ColumnsMenu';
 import { loadHidden, saveHidden, visibleIndexes } from '../lib/hiddenColumns';
 import FilterBar, { type FilterBarHandle, type FilterMode } from './FilterBar';
+import WriteLock, { LOCKED_HINT } from './WriteLock';
 
 const PAGE_SIZES = [100, 300, 1000];
 let insertSeq = 0;
 
 export default function DataTab({ tab, active }: { tab: TableTab; active: boolean }) {
   const session = useWs((w) => w.session);
-  const { setDirty, updateTab, openTable } = useWsActions();
+  const { setDirty, updateTab, openTable, unlockWrites } = useWsActions();
   const toast = useApp((s) => s.toast);
   const rowPanelOpen = useApp((s) => s.rowPanelOpen);
   const toggleRowPanel = useApp((s) => s.toggleRowPanel);
   const id = session.connectionId;
-  const database = session.config.engine === 'mysql' ? tab.database : null;
+  const engine = session.config.engine;
+  const database = isServer(engine) ? tab.database : null;
+  // Postgres: the tab's own schema (null = the server default, `public`); MySQL and SQLite have none
+  const schema = engine === 'postgres' ? (tab.schema ?? null) : null;
+  // prod Postgres: everything runs read-only until this tab unlocks writes
+  const unlocked = !!tab.writesUnlocked;
+  const locked = prodLocked(session.config) && !unlocked;
+  /** Postgres calls carry the schema and the unlock; MySQL and SQLite calls stay as they were */
+  const pgOpts = engine === 'postgres' ? { schema, unlocked } : {};
+  // read when a load starts; unlocking does not reload the rows
+  const unlockedRef = useRef(unlocked);
+  unlockedRef.current = unlocked;
+  /** per-table key (row counts, hidden columns, filter usage); Postgres adds the schema */
+  const tableKeyStr = schema ? `${id}/${database ?? ''}/${schema}/${tab.table}` : `${id}/${database ?? ''}/${tab.table}`;
 
   const [rawStructure, setStructure] = useState<TableStructure | null>(null);
   // virtual foreign keys count as foreign keys everywhere in the tab (FK arrows, row panel, structure)
-  const virtualKeys = useVirtualKeys(id, database);
+  const virtualKeys = useVirtualKeys(id, database, schema);
   const structure = useMemo(() => (rawStructure ? structureWithKeys(rawStructure, virtualKeys) : null), [rawStructure, virtualKeys]);
   const [structureError, setStructureError] = useState<string | null>(null);
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -83,17 +98,16 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   // structure: needed for primary key, types and the Structure view
   useEffect(() => {
     let cancelled = false;
-    api
-      .tableStructure(id, database, tab.table)
+    (schema ? api.tableStructure(id, database, tab.table, schema) : api.tableStructure(id, database, tab.table))
       .then((s) => !cancelled && setStructure(s))
       .catch((e) => !cancelled && setStructureError((e as Error).message));
     return () => {
       cancelled = true;
     };
-  }, [id, database, tab.table]);
+  }, [id, database, schema, tab.table]);
 
   const columnTypes = useMemo(() => Object.fromEntries(structure?.columns.map((c) => [c.name, c.dataType]) ?? []), [structure]);
-  const filter = filterMode === 'sql' ? (tab.sqlFilter ?? '').trim() : (compileFilter(rules, session.config.engine, columnTypes) ?? '');
+  const filter = filterMode === 'sql' ? (tab.sqlFilter ?? '').trim() : (compileFilter(rules, engine, columnTypes) ?? '');
 
   // the row count runs once per table and filter (not on every page or sort change); Refresh and Save recount
   const countedFor = useRef<string | null>(null);
@@ -103,30 +117,30 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
-    const request = { database, table: tab.table, filter: filter || null, sort, limit, offset };
+    const request = { database, ...(engine === 'postgres' ? { schema } : {}), table: tab.table, filter: filter || null, sort, limit, offset };
+    // the unlock only goes along on Postgres (other engines ignore it)
+    const unlock = engine === 'postgres' ? unlockedRef.current : undefined;
     try {
-      const res = await api.selectPage(id, request, tab.id);
+      const res = unlock === undefined ? await api.selectPage(id, request, tab.id) : await api.selectPage(id, request, tab.id, unlock);
       if (seq !== loadSeq.current) return;
       setResult(res);
       setSelectedRows([]);
       gridRef.current?.clearSelection();
       // total in the background; large tables can take a moment
-      const key = `${id}/${database ?? ''}/${tab.table}`;
+      const key = tableKeyStr;
       const countKey = `${key}/${filter}`;
       if (recount || countedFor.current !== countKey) {
         countedFor.current = countKey;
         const cs = ++countSeq.current;
         setTotal(null);
         setCounting(true);
-        api
-          .countRows(id, request, tab.id)
+        (unlock === undefined ? api.countRows(id, request, tab.id) : api.countRows(id, request, tab.id, unlock))
           .then((n) => cs === countSeq.current && setTotal(n))
           .catch(() => undefined)
           .finally(() => cs === countSeq.current && setCounting(false));
       }
       if (filter && (recount || tableTotal?.key !== key))
-        api
-          .countRows(id, { ...request, filter: null }, tab.id)
+        (unlock === undefined ? api.countRows(id, { ...request, filter: null }, tab.id) : api.countRows(id, { ...request, filter: null }, tab.id, unlock))
           .then((n) => setTableTotal({ key, n }))
           .catch(() => undefined);
     } catch (e) {
@@ -135,7 +149,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
       if (seq === loadSeq.current) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tableTotal only skips a repeated count
-  }, [id, database, tab.id, tab.table, filter, sort, limit, offset]);
+  }, [id, database, schema, tab.id, tab.table, filter, sort, limit, offset]);
 
   useEffect(() => {
     if (tab.view === 'data') load();
@@ -151,7 +165,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const meta = useMemo(() => (structure ? columnMeta(columns, structure) : undefined), [columns, structure]);
   const pkColumns = useMemo(() => structure?.columns.filter((c) => c.primaryKey).map((c) => c.name) ?? [], [structure]);
   // hidden columns (remembered per table): the grid gets only the shown ones and maps back to real indexes
-  const tableKey = `${id}/${database ?? ''}/${tab.table}`;
+  const tableKey = tableKeyStr;
   const [hidden, setHiddenState] = useState<string[]>(() => loadHidden(tableKey));
   // a foreign key jump can reuse this tab for another table
   useEffect(() => setHiddenState(loadHidden(tableKey)), [tableKey]);
@@ -178,7 +192,9 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     [columns, structure, pkColumns, meta],
   );
   const onlyKeys = () => setHidden(columnChoices.filter((c) => !c.key).map((c) => c.name));
-  const editable = tab.objectKind === 'table' && pkColumns.length > 0 && !!result && pkColumns.every((pk) => columns.some((c) => c.name === pk));
+  const editableTable = tab.objectKind === 'table' && pkColumns.length > 0 && !!result && pkColumns.every((pk) => columns.some((c) => c.name === pk));
+  // a locked prod Postgres tab shows the rows but takes no edits until "Unlock writes"
+  const editable = editableTable && !locked;
   const loadedCount = result?.rows.length ?? 0;
   const rowCount = loadedCount + changes.inserts.length;
 
@@ -279,16 +295,16 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   const startSave = useCallback(async () => {
     if (!pending) return;
     try {
-      setReview(await api.previewChanges(id, database, tab.table, toChangeSet(changes)));
+      setReview(schema ? await api.previewChanges(id, database, tab.table, toChangeSet(changes), schema) : await api.previewChanges(id, database, tab.table, toChangeSet(changes)));
     } catch (e) {
       toast((e as Error).message, 'error');
     }
-  }, [pending, id, database, tab.table, changes, toast]);
+  }, [pending, id, database, schema, tab.table, changes, toast]);
 
   const applySave = useCallback(async () => {
     setSaving(true);
     try {
-      const n = await api.applyChanges(id, database, tab.table, toChangeSet(changes));
+      const n = engine === 'postgres' ? await api.applyChanges(id, database, tab.table, toChangeSet(changes), pgOpts) : await api.applyChanges(id, database, tab.table, toChangeSet(changes));
       setReview(null);
       setHistory(emptyHistory());
       toast(`Saved · ${n} row${n === 1 ? '' : 's'} affected`, 'success');
@@ -298,7 +314,8 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     } finally {
       setSaving(false);
     }
-  }, [id, database, tab.table, changes, toast, load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pgOpts is made of engine, schema and unlocked
+  }, [id, engine, database, schema, unlocked, tab.table, changes, toast, load]);
 
   const discard = async () => {
     if (pending && !(await confirmDialog(`Discard ${pending} unsaved change${pending > 1 ? 's' : ''}?`))) return;
@@ -392,18 +409,18 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
   };
 
   const suggestValues = useCallback(
-    async (column: string) => (await api.commonValues(id, database, tab.table, column)).filter((v) => v !== null).map(String),
-    [id, database, tab.table],
+    async (column: string) => (await (schema ? api.commonValues(id, database, tab.table, column, schema) : api.commonValues(id, database, tab.table, column))).filter((v) => v !== null).map(String),
+    [id, database, schema, tab.table],
   );
 
   // tables whose rows point to rows of this table (real, virtual and guessed relations)
-  const referencing = useReferencing(id, database, tab.table);
+  const referencing = useReferencing(id, database, tab.table, schema);
   /** Opens the rows of another table that point to this row */
   const openReferencing = (row: number, r: Relation) => {
     const col = columns.findIndex((c) => c.name === r.toColumns[0]);
     const value = col >= 0 ? getValue(row, col) : null;
     if (value === null) return;
-    openTable(r.from, 'table', 'data', { filters: [ruleForValue(r.fromColumns[0], value)] });
+    openTable(r.from, 'table', 'data', { filters: [ruleForValue(r.fromColumns[0], value)], ...(engine === 'postgres' ? { schema } : {}) });
   };
 
   /** Opens the row a foreign key cell points to: a new tab filtered to it, or this tab */
@@ -412,7 +429,9 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
     const value = getValue(row, col);
     if (!fk || value === null) return;
     if (sameTab && pending && !(await confirmDialog(`Discard ${pending} unsaved change${pending > 1 ? 's' : ''}?`))) return;
-    openTable(fk.table, 'table', 'data', { filters: [ruleForValue(fk.column, value)], replaceTabId: sameTab ? tab.id : undefined });
+    // Postgres: a key to another schema is named `schema.table`
+    const target = engine === 'postgres' ? splitTableKey(fk.table, schema ?? 'public', session.schemas) : null;
+    openTable(target ? target.table : fk.table, 'table', 'data', { filters: [ruleForValue(fk.column, value)], replaceTabId: sameTab ? tab.id : undefined, ...(target ? { schema: target.schema } : {}) });
   };
 
   // the grid may report rows that do not exist (e.g. -1 for the header, or past the end after a reload)
@@ -435,6 +454,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
 
   const toolbarEnd = (
     <>
+      {prodLocked(session.config) && <WriteLock unlocked={unlocked} connection={session.config.name} database={database} onUnlock={() => unlockWrites(tab.id)} />}
       {loading ? (
         <button className="btn h-7 gap-1.5 px-2" onClick={cancel} title={`Stop loading (Esc or ${MOD}.)`} data-testid="cancel-load">
           <Loader2 size={13} className="animate-spin" /> <span className="@max-[820px]:hidden">Cancel</span>
@@ -463,9 +483,12 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
             <StructureView
               structure={structure}
               tables={session.objects.map((o) => o.name)}
-              onAddVirtualKey={(k) => useSchema.getState().saveKey(id, database, { table: tab.table, ...k })}
-              onDeleteVirtualKey={(keyId) => useSchema.getState().deleteKey(id, database, keyId)}
-              onOpenTable={(t) => openTable(t)}
+              onAddVirtualKey={(k) => useSchema.getState().saveKey(id, database, { table: tab.table, ...k }, schema)}
+              onDeleteVirtualKey={(keyId) => useSchema.getState().deleteKey(id, database, keyId, schema)}
+              onOpenTable={(t) => {
+                const target = engine === 'postgres' ? splitTableKey(t, schema ?? 'public', session.schemas) : null;
+                openTable(target ? target.table : t, undefined, undefined, target ? { schema: target.schema } : undefined);
+              }}
               onShowInData={(names) => {
                 const keep = new Set([...names, ...structure.columns.filter((c) => c.primaryKey).map((c) => c.name)]);
                 setHidden(structure.columns.filter((c) => !keep.has(c.name)).map((c) => c.name));
@@ -540,7 +563,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
         )}
 
         <BottomBar>
-          <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={addRow} disabled={!editable} title="Add a row" data-testid="add-row">
+          <button className="btn btn-ghost h-7 gap-1.5 px-2" onClick={addRow} disabled={!editable} title={editableTable && locked ? LOCKED_HINT : 'Add a row'} data-testid="add-row">
             <Plus size={14} /> <span className="@max-[720px]:hidden">Add row</span>
           </button>
           <button
@@ -564,7 +587,12 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
               </button>
             </>
           )}
-          {!editable && result && tab.objectKind === 'table' && structure && <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3">Read-only · no primary key</span>}
+          {!editableTable && result && tab.objectKind === 'table' && structure && <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3">Read-only · no primary key</span>}
+          {editableTable && locked && (
+            <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3" title={LOCKED_HINT} data-testid="locked-note">
+              Read-only · prod
+            </span>
+          )}
           {tab.objectKind === 'view' && <span className="ml-1 whitespace-nowrap text-[11.5px] text-ink-3">View · read-only</span>}
 
           {/* the count takes the free middle space and is cut (…) instead of drawing over the buttons */}
@@ -699,7 +727,7 @@ export default function DataTab({ tab, active }: { tab: TableTab; active: boolea
           statements={review}
           environment={session.config.environment}
           connectionName={session.config.name}
-          database={session.config.engine === 'mysql' ? database : session.info.currentDatabase}
+          database={isServer(engine) ? database : session.info.currentDatabase}
           busy={saving} onApply={applySave} onClose={() => setReview(null)} />
       )}
     </div>
