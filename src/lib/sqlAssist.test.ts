@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Relation } from './diagram';
-import { aliasFor, aliasedTableUses, explainSqlError, joinSuggestions, lintStatement, maskSql, tableRefs, updatesAllRows } from './sqlAssist';
+import { aliasFor, searchPathTables, aliasedTableUses, explainSqlError, joinSuggestions, lintStatement, maskSql, tableRefs, updatesAllRows } from './sqlAssist';
 
 const rel = (from: string, fromCol: string, to: string, toCol: string, extra: Partial<Relation> = {}): Relation => ({
   id: `${from}.${fromCol}`,
@@ -93,3 +93,17 @@ describe('SQL assist', () => {
   });
 });
 
+
+describe('searchPathTables', () => {
+  const cols = { customers: ['id'], invoices: ['old'], 'billing.invoices': ['id', 'due'], 'audit.log': ['at'] };
+  it('lets tables of the selected Postgres schema be named without the schema', () => {
+    const t = searchPathTables(cols, 'billing');
+    expect(t.invoices).toEqual(['id', 'due']);
+    expect(t['billing.invoices']).toEqual(['id', 'due']);
+    expect(t.customers).toEqual(['id']);
+    expect(t.log).toBeUndefined();
+  });
+  it('changes nothing without a schema', () => {
+    expect(searchPathTables(cols, null)).toEqual(cols);
+  });
+});

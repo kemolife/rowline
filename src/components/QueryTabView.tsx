@@ -9,7 +9,7 @@ import { api, confirmDialog, pickSavePath } from '../lib/api';
 import { codeMirrorDialect } from '../lib/cmDialect';
 import { isServer, prodLocked, sqlDialectName } from '../lib/engine';
 import { setStatements, statementGutter, statementsField, toEditorStatements } from '../lib/statementGutter';
-import { lintStatement, updatesAllRows } from '../lib/sqlAssist';
+import { lintStatement, searchPathTables, updatesAllRows } from '../lib/sqlAssist';
 import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
 import { acceptCompletion, autocompletion, startCompletion, type Completion, type CompletionContext } from '@codemirror/autocomplete';
 import { completeSql, loadUsage, opensNextSuggestions, recordUse, type SuggestionKind } from '../lib/sqlComplete';
@@ -82,9 +82,9 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   useEffect(() => {
     api
       .schemaColumns(id, database)
-      .then(setSchema)
+      .then((cols) => setSchema(searchPathTables(cols, pgSchema)))
       .catch(() => setSchema({}));
-  }, [id, database]);
+  }, [id, database, pgSchema]);
   // table → columns (lower case) for the warnings
   useEffect(() => {
     assist.current.schema = new Map(Object.entries(schema).map(([t, cols]) => [t.toLowerCase(), new Set(cols.map((c) => c.toLowerCase()))]));

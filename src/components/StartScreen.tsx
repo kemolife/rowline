@@ -195,7 +195,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
                 <Database size={20} />
               </div>
               <div className="text-[15px] font-medium">No connections yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-ink-2">Add a MySQL server or open a SQLite file. Passwords stay on this Mac, in a file only your user can read.</p>
+              <p className="mx-auto mt-1 max-w-sm text-ink-2">Add a MySQL or PostgreSQL server, or open a SQLite file. Passwords stay on this Mac, in a file only your user can read.</p>
               <button className="btn btn-primary mt-5 h-9 px-4" onClick={newConnection}>
                 <Plus size={15} /> New connection
               </button>
@@ -225,7 +225,7 @@ export default function StartScreen({ embedded = false }: { embedded?: boolean }
         </div>
       </div>
       <div className="flex h-10 shrink-0 items-center justify-between border-t border-line px-4 text-[11.5px] text-ink-3">
-        <span>MySQL · SQLite</span>
+        <span>MySQL · PostgreSQL · SQLite</span>
         <div className="flex-1" />
         <button className="btn btn-ghost h-7" onClick={installCli} title="Put the udb command in ~/.local/bin: agents can run read-only queries on open connections" data-testid="install-cli">
           <Terminal size={14} /> Command line

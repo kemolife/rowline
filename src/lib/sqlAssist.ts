@@ -195,3 +195,16 @@ export function explainSqlError(message: string, sql: string): string | null {
   }
   return null;
 }
+
+/**
+ * Postgres: `schema_columns` names tables outside `public` as `schema.table`. The SQL editor's
+ * search_path is the selected schema first, so its tables can be written without the schema too
+ * (and win over a `public` table of the same name, like in Postgres).
+ */
+export function searchPathTables(columns: Record<string, string[]>, schema: string | null): Record<string, string[]> {
+  if (!schema) return columns;
+  const out = { ...columns };
+  const prefix = `${schema}.`;
+  for (const [key, cols] of Object.entries(columns)) if (key.startsWith(prefix)) out[key.slice(prefix.length)] = cols;
+  return out;
+}
