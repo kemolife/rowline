@@ -548,6 +548,11 @@ fn split_postgres(sql: &str) -> Vec<StatementRange> {
                             i += 2;
                             continue;
                         }
+                        // 'a'<newline>'b' is one literal, with the first part's escape rules
+                        if let Some(next) = pg_string_continues(&chars, i + 1) {
+                            i = next + 1;
+                            continue;
+                        }
                         break;
                     }
                     i += 1;
@@ -583,6 +588,29 @@ fn split_postgres(sql: &str) -> Vec<StatementRange> {
     }
     push_part(&mut res, &chars, start, chars.len().min(i.max(start)), only_comments);
     res
+}
+
+/// After a '…' literal that closed just before `i`: the index of the `'` that continues it, if any. Postgres
+/// joins two literals separated by whitespace (and `--` comments) with at least one newline, and the joined
+/// part keeps the first part's escape rules. A `/* */` comment between them stops that.
+pub(crate) fn pg_string_continues(chars: &[char], mut i: usize) -> Option<usize> {
+    let mut newline = false;
+    loop {
+        match (chars.get(i), chars.get(i + 1)) {
+            (Some('\n' | '\r'), _) => {
+                newline = true;
+                i += 1;
+            }
+            (Some(c), _) if c.is_whitespace() => i += 1,
+            (Some('-'), Some('-')) => {
+                while i < chars.len() && chars[i] != '\n' && chars[i] != '\r' {
+                    i += 1;
+                }
+            }
+            (Some('\''), _) if newline => return Some(i),
+            _ => return None,
+        }
+    }
 }
 
 /// Index after the whitespace and Postgres comments that start at `i` (`--` to \n or \r, nested `/* */`).
@@ -998,6 +1026,16 @@ mod tests {
         for s in split_statements_for(sql, Dialect::Postgres) {
             assert_eq!(chars[s.start..s.end].iter().collect::<String>(), s.text);
         }
+    }
+
+    #[test]
+    fn postgres_split_continues_strings() {
+        // 'a'<newline>'b' is one literal; after E'…' the next part keeps backslash escapes
+        assert_eq!(pg_parts("select 'a'\n';'; select 2"), vec!["select 'a'\n';'", "select 2"]);
+        assert_eq!(pg_parts("select e'a'\n'\\';'; select 2"), vec!["select e'a'\n'\\';'", "select 2"]);
+        assert_eq!(pg_parts("select 'a'\n-- c\n'\\'; select 2"), vec!["select 'a'\n-- c\n'\\'", "select 2"]);
+        // no newline, or a block comment: no continuation
+        assert_eq!(pg_parts("select e'a' '\\'; select 2'").len(), 2);
     }
 
     #[test]

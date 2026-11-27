@@ -359,7 +359,8 @@ struct PgMasked {
     /// a character from U+0080 up outside string literals, quoted names and dollar-quoted bodies
     non_ascii: bool,
     /// a `$$` / `$tag$` right after a number or parameter: the server may open a dollar quote there
-    ambiguous_dollar: bool,
+    ambiguous_dollar: bool,    /// a '…' literal followed (after whitespace or comments) by another `'`: a string continuation
+    string_continuation: bool,
 }
 
 fn pg_ident_char(c: char) -> bool {
@@ -389,6 +390,7 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
     let mut unclosed = false;
     let mut non_ascii = false;
     let mut ambiguous_dollar = false;
+    let mut string_continuation = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -410,7 +412,16 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
                     }
                     Some('\\') if escapes => i += 2,
                     Some('\'') if chars.get(i + 1) == Some(&'\'') => i += 2,
-                    Some('\'') => break,
+                    Some('\'') => {
+                        if chars.get(sqlgen::pg_skip_comments(&chars, i + 1)) == Some(&'\'') {
+                            string_continuation = true;
+                        }
+                        // 'a'<newline>'b' is one literal, with the first part's escape rules
+                        match sqlgen::pg_string_continues(&chars, i + 1) {
+                            Some(next) => i = next + 1,
+                            None => break,
+                        }
+                    }
                     Some(_) => i += 1,
                 }
             }
@@ -494,7 +505,7 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
             i += 1;
         }
     }
-    PgMasked { text: out, unicode_ident, unclosed, non_ascii, ambiguous_dollar }
+    PgMasked { text: out, unicode_ident, unclosed, non_ascii, ambiguous_dollar, string_continuation }
 }
 
 /// Upper-case words of masked text with the next non-space character after each.
@@ -526,6 +537,11 @@ fn check_postgres(text: String) -> AppResult<String> {
     for (plain, idents) in &readings {
         if plain.unclosed || idents.unclosed {
             return Err(AppError::msg("The query has an unclosed quote, dollar quote or comment."));
+        }
+        if plain.string_continuation || idents.string_continuation {
+            return Err(AppError::msg(
+                "A string literal followed by another one (across a line break or a comment) is not allowed in read-only queries. Join the strings into one literal.",
+            ));
         }
         if plain.text.contains(';') {
             return Err(one_statement());
@@ -1071,6 +1087,32 @@ mod tests {
             pg_ok(sql);
         }
         pg_ok("select a1$b from t");
+    }
+
+    /// Re-review PoC: Postgres joins 'a'<newline>'b' into one literal, and the second part keeps the
+    /// first part's backslash escapes (E'…'), so `'\''` there ends later than a plain string would.
+    const CONTINUATION_POC: &str = "select e'a'\n'\\'' , '\\' , 42 as visible --'";
+
+    #[test]
+    fn postgres_lexer_continues_strings_like_the_server() {
+        let masked = mask_postgres(CONTINUATION_POC, false, false);
+        assert!(masked.text.contains("42") && masked.text.contains("VISIBLE".to_lowercase().as_str()), "{:?}", masked.text);
+        assert!(masked.string_continuation);
+        let blocked = CONTINUATION_POC.replace("42", "pg_sleep(9)");
+        assert!(mask_postgres(&blocked, false, false).text.contains("pg_sleep"));
+    }
+
+    #[test]
+    fn postgres_refuses_string_continuation() {
+        assert!(pg_refused(CONTINUATION_POC).contains("Join the strings"));
+        pg_refused(&CONTINUATION_POC.replace("42", "pg_sleep(9)"));
+        for sql in ["select 'a'\n'b'", "select 'a'\n  -- c\n'b'", "select 'a' /* c */ 'b'", "select 'a' 'b'", "select E'a'\n'b'"] {
+            assert!(pg_refused(sql).contains("Join the strings"), "{sql:?}");
+        }
+        // separate literals are fine
+        for sql in ["select 'a', 'b'", "select 'a' || 'b'", "select 'a'\n, 'b'", "select 'it''s'", "select E'a', 'b' as x"] {
+            pg_ok(sql);
+        }
     }
 
     #[test]
