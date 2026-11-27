@@ -77,8 +77,7 @@ The user picked A.
 - A connection shows **one database + one schema** at a time.
 - **Database picker**: same control as for MySQL. For Postgres, choosing a database
   opens a new connection to it (Postgres can't switch database on a live connection).
-  Tabs of the old database stay open as tabs but must reconnect/fail clearly — see
-  "Left to the builder".
+  Tabs of the old database keep working (see "Calls", 3).
 - **Schema dropdown** at the top of the sidebar, above the table filter.
   Default: `public` if it exists and has tables, else the first schema with tables.
   Hidden when the database has only one user schema. System schemas
@@ -167,13 +166,62 @@ Frontend (`engine === 'mysql'` checks found in 17 files):
 - `store/app.ts` — current schema per connection, remembered like the current database.
 - SQL editor highlighting: CodeMirror `PostgreSQL` dialect.
 
+## Calls made after the builder check (author's calls, not the user's)
+
+1. **`database` and `schema` arguments.** For Postgres, the existing per-call
+   `database` argument keeps its meaning: the database name. The session routes it to
+   the client for that database (see 3). A new optional `schema` argument is added to
+   every command/method that names a table or lists objects (`objects`, `structure`,
+   `select_page`, `count`, `common_values`, `schema_graph`, `apply_changes`,
+   `execute`, `select_read_only`). `None` means the connection's selected schema.
+   MySQL and SQLite ignore `schema`. `readonly::blocked_database` gets a Postgres
+   twin that blocks system schemas (`pg_catalog`, `information_schema`, `pg_toast*`)
+   when passed as `schema`; reading catalog views for structure stays inside the driver.
+   `schema_columns` returns keys as `schema.table` for non-`public` schemas, so ⌘K can
+   search all schemas.
+2. **Schema for Claude, MCP and `udb`.** Same rule as the database today: the schema
+   selected in the UI (kept in `Manager` next to the database, set by a new
+   `set_active_schema` command), else `public`. `udb` gets `--schema`. MCP tools get an
+   optional `schema` field. `search_path` is set to `"<schema>", public` on these
+   paths too.
+3. **Keying.** One `Session::Postgres` per saved connection id, as today. Inside it, a
+   small map `database → pool of clients`, created on first use. Switching database in
+   the picker does not close the old pool, so open tabs of the old database keep
+   working (no reconnect logic needed). Idle pools close after a few minutes.
+   `ConnectionConfig.database` stays the default database, saved like MySQL.
+   Saved queries and schema snapshots keep their current keys (`id` + `database`).
+4. **Safety bar.** Deny-list approach, same as MySQL, plus the server-side READ ONLY
+   transaction. Added to the deny-list: `nextval`, `setval`, `pg_notify`,
+   `pg_logical_*`, `pg_create_*_slot`, `pg_drop_replication_slot`, `pg_replication_*`,
+   `txid_*`/`pg_current_xact_id` (assign ids), `lo_*`, and `SELECT … INTO`,
+   `FOR UPDATE / NO KEY UPDATE / SHARE / KEY SHARE`. Calls to functions outside
+   `pg_catalog` (user-defined) are allowed: the READ ONLY transaction stops their
+   writes, and file/network access needs superuser-only extensions. Extra guard: if
+   the connection user is a **superuser** (`rolsuper`), the Claude/`udb` paths
+   refuse to run with a clear message ("connect Claude with a non-superuser role").
+   The readonly parser tests are unit tests: they never need the container and never
+   skip.
+5. **Parameter binding.** Postgres uses `$n` placeholders. Values from the grid and
+   filters are sent as text and cast with `$n::<column type>` using the column
+   metadata from `structure`. `sqlgen` gets a `Dialect::Postgres` placeholder writer.
+6. **Editable types.** Everything with a text input form is editable through the
+   cast in 5: numbers, text, bool, json/jsonb, uuid, enums, dates, timestamps,
+   interval, inet, arrays (Postgres array literal text). `bytea` is read-only in the
+   grid (shown as `\x…` hex, cut). `timestamptz` is shown as the server returns it
+   with the offset; the session `TimeZone` is set to the Mac's local zone.
+7. **Pool and cancel.** Small pool per database (4 clients). Each running query records
+   `(owner, CancelToken)` while it runs (Drop guard, like MySQL's `tracked()`).
+   `cancel(owner)` sends cancel for that owner's entries only. Count and page queries
+   take another client from the pool, so they don't wait for a long query.
+8. **Versions and poolers.** Support Postgres 12+. All session settings for one query
+   use `SET LOCAL` inside the query's transaction, so PgBouncer transaction mode works.
+   Test container: `postgres:16`.
+9. **Tests.** Driver tests skip without `ROWLINE_TEST_POSTGRES`, like MySQL.
+   `scripts/test-rust.sh` sets it from `dev/docker/.env`, so a normal local run covers them.
+
 ## Left to the builder
 
 - Module split inside `drivers/postgres/` and exact function names.
-- Connection pooling (one client per database vs a small pool) — but count and page
-  queries must be able to run while a long query runs, as on MySQL.
-- How open tabs behave after a database switch (reconnect on focus or show an error
-  and offer to reopen) — pick the simpler one that matches MySQL behaviour.
 - Exact list order and wording of error messages (follow the MySQL style:
   `ERROR code (state): message`, using Postgres SQLSTATE).
 - Estimated row counts in the sidebar (`~`) from `pg_class.reltuples`, like MySQL.
