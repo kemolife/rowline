@@ -287,7 +287,7 @@ const PG_BLOCKED_FUNCTIONS: &[&str] = &[
     "PG_EXPORT_SNAPSHOT", "PG_DROP_REPLICATION_SLOT", "PG_CREATE_RESTORE_POINT", "PG_START_BACKUP", "PG_STOP_BACKUP",
     "PG_LOG_BACKEND_MEMORY_CONTEXTS", "PG_IMPORT_SYSTEM_COLLATIONS", "PG_TRUNCATE_VISIBILITY_MAP", "PG_PREWARM",
     "TS_STAT", "TS_REWRITE", "CONNECTBY", "GIN_CLEAN_PENDING_LIST", "HTTP", "INVOKE", "QUERY_EXPORT_TO_S3",
-    "TABLE_IMPORT_FROM_S3", "AWS_S3", "AWS_LAMBDA", "AWS_ML", "AWS_COMMONS",
+    "TABLE_IMPORT_FROM_S3", "AWS_S3", "AWS_LAMBDA", "AWS_ML", "AWS_COMMONS", "XPATH_TABLE",
 ];
 const PG_BLOCKED_PREFIXES: &[&str] = &[
     "PG_READ_", "PG_LS_", "PG_SLEEP", "LO_", "DBLINK", "PG_ADVISORY", "PG_TRY_ADVISORY", "PG_LOGICAL_", "PG_CREATE_",
@@ -295,6 +295,7 @@ const PG_BLOCKED_PREFIXES: &[&str] = &[
     "PG_BACKGROUND", "HTTP_", "CROSSTAB", "PG_WAL_REPLAY_", "PG_BACKUP_",
 ];
 /// `query_to_xml`, `table_to_xml`, `cursor_to_xmlschema`… run SQL from a string or a whole table/schema
+/// (`xpath_table` of the xml2 extension does too: it is in `PG_BLOCKED_FUNCTIONS`)
 const PG_BLOCKED_PARTS: &[&str] = &["_TO_XML"];
 
 fn pg_blocked_function(word: &str) -> bool {
@@ -312,8 +313,14 @@ const PG_SYSTEM_DATA: &[&str] = &[
 const PG_SYSTEM_DATA_PREFIXES: &[&str] =
     &["PG_STAT_STATEMENTS", "PG_STAT_GET_BACKEND_", "PG_LARGEOBJECT", "PG_SUBSCRIPTION", "PG_STATISTIC", "PG_TOAST"];
 
+/// Any name with these parts: user mappings hold foreign-server passwords (`pg_user_mapping(s)`,
+/// `information_schema.user_mapping_options`, `information_schema._pg_user_mappings`…).
+const PG_SYSTEM_DATA_PARTS: &[&str] = &["USER_MAPPING"];
+
 fn pg_system_name(word: &str) -> bool {
-    PG_SYSTEM_DATA.contains(&word) || PG_SYSTEM_DATA_PREFIXES.iter().any(|p| word.starts_with(p))
+    PG_SYSTEM_DATA.contains(&word)
+        || PG_SYSTEM_DATA_PREFIXES.iter().any(|p| word.starts_with(p))
+        || PG_SYSTEM_DATA_PARTS.iter().any(|p| word.contains(p))
 }
 
 fn pg_not_read_only() -> AppError {
@@ -965,6 +972,8 @@ mod tests {
             "select pg_backup_start('x')",
             "select pg_log_backend_memory_contexts(1)",
             "select pg_import_system_collations('pg_catalog')",
+            "select * from xpath_table('id', 'x', 't', '/a', 'true') as t(id int, a text)",
+            "select public.xpath_table('id', 'x', 't', '/a', 'true')",
         ] {
             let err = pg_refused(sql);
             assert!(err.contains("is not allowed"), "{sql}: {err}");
@@ -1000,6 +1009,10 @@ mod tests {
             "select * from pg_subscription",
             "select * from pg_statistic",
             "select * from pg_toast.pg_toast_1234",
+            "select * from information_schema.user_mapping_options",
+            "select * from information_schema._pg_user_mappings",
+            "select * from information_schema.\"user_mapping_options\"",
+            "select * from information_schema.user_mappings",
         ] {
             let err = pg_refused(sql);
             assert!(err.contains("system"), "{sql}: {err}");
