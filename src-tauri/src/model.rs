@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 pub enum Engine {
     Mysql,
     Sqlite,
+    Postgres,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

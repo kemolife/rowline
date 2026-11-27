@@ -11,6 +11,7 @@ const KEYWORDS = ['AND', 'OR', 'NOT', 'IS NULL', 'IS NOT NULL', 'LIKE', 'NOT LIK
 const FUNCTIONS: Record<Engine, string[]> = {
   mysql: ['NOW()', 'CURDATE()', 'DATE()', 'LOWER()', 'UPPER()', 'LENGTH()', 'COALESCE()', 'IFNULL()', 'CONCAT()', 'FIND_IN_SET()', 'JSON_EXTRACT()', 'DATE_SUB()', 'INTERVAL'],
   sqlite: ["datetime('now')", "date('now')", 'date()', 'lower()', 'upper()', 'length()', 'coalesce()', 'ifnull()', 'instr()', 'json_extract()'],
+  postgres: ['now()', 'current_date', 'lower()', 'upper()', 'length()', 'coalesce()', 'concat()', 'date_trunc()', "interval '1 day'"],
 };
 
 const RESERVED = new Set(['and', 'or', 'not', 'is', 'null', 'like', 'in', 'between', 'order', 'group', 'select', 'from', 'where', 'key', 'index', 'table', 'limit', 'desc', 'asc', 'by']);

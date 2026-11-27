@@ -113,7 +113,7 @@ async fn open_connections(state: &AppState) -> Vec<ConnectionConfig> {
 /// MySQL: --db, else the database selected in the app, else the saved default. SQLite: none.
 fn database(state: &AppState, c: &ConnectionConfig, asked: Option<&str>) -> Option<String> {
     match c.engine {
-        Engine::Mysql => asked.map(str::to_string).or_else(|| state.manager.database(&c.id)).or_else(|| c.database.clone()),
+        Engine::Mysql | Engine::Postgres => asked.map(str::to_string).or_else(|| state.manager.database(&c.id)).or_else(|| c.database.clone()),
         Engine::Sqlite => None,
     }
 }

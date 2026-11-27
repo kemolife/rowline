@@ -241,7 +241,7 @@ async fn resolve(state: &AppState, chat: &ChatConfig, a: &ToolArgs) -> AppResult
 /// MySQL: the argument, else the database selected in uDB, else the saved default. SQLite: none.
 fn database(chat: &ChatConfig, c: &ConnectionConfig, a: &ToolArgs) -> Option<String> {
     match c.engine {
-        Engine::Mysql => a.database.clone().or_else(|| chat.database_for(&c.id)).or_else(|| c.database.clone()),
+        Engine::Mysql | Engine::Postgres => a.database.clone().or_else(|| chat.database_for(&c.id)).or_else(|| c.database.clone()),
         Engine::Sqlite => None,
     }
 }

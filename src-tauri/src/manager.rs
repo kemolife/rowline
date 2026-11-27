@@ -31,6 +31,7 @@ impl Session {
                     .await?,
                 ))
             }
+            Engine::Postgres => Err(AppError::msg("PostgreSQL is not ready yet")),
             Engine::Sqlite => {
                 let path = config.file_path.as_deref().filter(|p| !p.is_empty()).ok_or_else(|| AppError::msg("SQLite file path is empty"))?;
                 Ok(Session::Sqlite(SqliteSession::open(&expand_home(path)).await?))

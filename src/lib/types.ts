@@ -1,5 +1,5 @@
 // Mirrors src-tauri/src/model.rs
-export type Engine = 'mysql' | 'sqlite';
+export type Engine = 'mysql' | 'sqlite' | 'postgres';
 export type Environment = 'local' | 'dev' | 'staging' | 'prod';
 export type TlsMode = 'off' | 'required' | 'verify';
 export type ClaudeAccess = 'data' | 'schema' | 'off';
