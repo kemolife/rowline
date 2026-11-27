@@ -19,7 +19,7 @@ vi.mock('../lib/api', () => ({
 }));
 
 import { api } from '../lib/api';
-import { activeWorkspace, needsReconnect, useApp } from './app';
+import { activeWorkspace, needsReconnect, queryTabUnlocked, useApp, type QueryTab } from './app';
 
 const conn = (id: string, engine: 'mysql' | 'sqlite' | 'postgres' = 'mysql', environment: 'dev' | 'prod' = 'dev') => ({ id, name: id, engine, environment });
 
@@ -458,6 +458,32 @@ describe('unlocking writes per tab', () => {
     await useApp.getState().closeTabs('p', [a]);
     expect(unlocked(b)).toBe(true);
     expect(tabs()).toHaveLength(1);
+  });
+
+  it('a query tab unlock holds only for the database and schema it was given for', async () => {
+    const ws = () => useApp.getState().workspaces.p;
+    const q = () => ws().tabs.find((t) => t.kind === 'query') as QueryTab;
+    const open = () => queryTabUnlocked(q(), ws().session);
+    vi.mocked(api.listSchemas).mockResolvedValue(['public', 'billing']);
+    useApp.getState().unlockWrites('p', q().id);
+    expect(open()).toBe(true);
+    // the editor follows the schema picker: another schema locks the tab again
+    await useApp.getState().setSchema('p', 'billing');
+    expect(ws().session.schema).toBe('billing');
+    expect(open()).toBe(false);
+    await useApp.getState().setSchema('p', 'public');
+    expect(open()).toBe(false);
+    // and another database
+    useApp.getState().unlockWrites('p', q().id);
+    expect(open()).toBe(true);
+    await useApp.getState().selectDatabase('p', 'crm');
+    expect(open()).toBe(false);
+    await useApp.getState().selectDatabase('p', 'shop');
+    expect(open()).toBe(false);
+    // a schema switch the user did not pick (the old schema is gone) counts too
+    useApp.getState().unlockWrites('p', q().id);
+    useApp.setState({ workspaces: { ...useApp.getState().workspaces, p: { ...ws(), session: { ...ws().session, schema: 'billing' } } } });
+    expect(open()).toBe(false);
   });
 
   it('is never saved with the tabs and never restored', async () => {

@@ -17,7 +17,7 @@ import { useRelations } from '../store/schema';
 import type { HistoryEntry } from '../lib/types';
 import { MOD, cx, matchKey } from '../lib/ui';
 import { useDismiss } from '../lib/useDismiss';
-import { useApp, type QueryTab } from '../store/app';
+import { queryTabUnlocked, useApp, type QueryTab } from '../store/app';
 import { useChat } from '../store/chat';
 import { useQueries } from '../store/queries';
 import { useWs, useWsActions } from '../store/workspace';
@@ -47,7 +47,8 @@ export default function QueryTabView({ tab, active }: { tab: QueryTab; active: b
   // Postgres: plain table names find the sidebar schema first (search_path), then `public`
   const pgSchema = engine === 'postgres' ? session.schema : null;
   // prod Postgres: the editor runs read-only until this tab unlocks writes
-  const unlocked = !!tab.writesUnlocked;
+  // the unlock holds only for the database and schema it was given for (the editor follows the picker)
+  const unlocked = queryTabUnlocked(tab, session);
   const locked = prodLocked(session.config) && !unlocked;
 
   const [sql, setSql] = useState(tab.sql);

@@ -53,6 +53,17 @@ export interface QueryTab {
   maxRows?: number;
   /** prod Postgres: the user unlocked writes in this tab. Never saved; gone when the tab closes. */
   writesUnlocked?: boolean;
+  /**
+   * The database and schema the unlock was given for. The editor runs against the sidebar's database and
+   * schema, so the unlock holds only while those are the same (see `queryTabUnlocked`).
+   */
+  unlockedFor?: { database: string | null; schema: string | null };
+}
+
+/** True when this query tab may write: it was unlocked for the database and schema the session shows now. */
+export function queryTabUnlocked(tab: QueryTab, session: Pick<Session, 'database' | 'schema'>): boolean {
+  const target = tab.unlockedFor;
+  return !!tab.writesUnlocked && !!target && target.database === session.database && target.schema === (session.schema ?? null);
 }
 
 /** Relation diagram of one database */
@@ -411,6 +422,8 @@ export const useApp = create<AppState>((set, get) => {
     selectDatabase: async (cid, db) => {
       const w = get().workspaces[cid];
       if (!w || w.session.database === db) return;
+      // query tabs follow the picker: their unlock was for the old database
+      patchWs(cid, (ws) => ({ tabs: ws.tabs.map(lockQueryTab) }));
       // Postgres: the new database gets its own schemas and default schema
       patchSession(cid, () => ({ database: db, schemas: [], schema: null, objects: [] }));
       api.setActiveDatabase(cid, db).catch(() => {});
@@ -448,11 +461,20 @@ export const useApp = create<AppState>((set, get) => {
     setSchema: async (cid, schema) => {
       const w = get().workspaces[cid];
       if (!w || w.session.config.engine !== 'postgres' || w.session.schema === schema) return;
+      patchWs(cid, (ws) => ({ tabs: ws.tabs.map(lockQueryTab) }));
       patchSession(cid, () => ({ schema, objects: [] }));
       await get().refreshObjects(cid);
     },
 
-    unlockWrites: (cid, id) => patchWs(cid, (w) => ({ tabs: w.tabs.map((t) => (t.id === id && t.kind !== 'diagram' ? { ...t, writesUnlocked: true } : t)) })),
+    unlockWrites: (cid, id) =>
+      patchWs(cid, (w) => ({
+        tabs: w.tabs.map((t) => {
+          if (t.id !== id || t.kind === 'diagram') return t;
+          // a query tab runs against the sidebar's database and schema: the unlock is for those only
+          if (t.kind === 'query') return { ...t, writesUnlocked: true, unlockedFor: { database: w.session.database, schema: w.session.schema ?? null } };
+          return { ...t, writesUnlocked: true };
+        }),
+      })),
 
     openTable: (cid, name, kind = 'table', view = 'data', opts = {}) => {
       const w = get().workspaces[cid];
@@ -664,9 +686,14 @@ function loadSavedTabs(connectionId: string): { tabs: Tab[]; activeTabId: string
 
 /** A tab without its write unlock: the unlock is never saved or restored */
 function withoutUnlock<T extends Tab>(t: T): T {
-  if (!('writesUnlocked' in t)) return t;
-  const { writesUnlocked: _unlocked, ...rest } = t;
-  return rest as T;
+  if (!('writesUnlocked' in t) && !('unlockedFor' in t)) return t;
+  const { writesUnlocked: _unlocked, unlockedFor: _for, ...rest } = t as T & { writesUnlocked?: unknown; unlockedFor?: unknown };
+  return rest as unknown as T;
+}
+
+/** A query tab locked again (the database or schema it writes to changed) */
+function lockQueryTab(t: Tab): Tab {
+  return t.kind === 'query' ? withoutUnlock(t) : t;
 }
 
 const saveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
