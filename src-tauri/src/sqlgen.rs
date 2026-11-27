@@ -377,18 +377,34 @@ pub struct StatementRange {
     pub text: String,
 }
 
+/// First character of a Postgres name: `[A-Za-z_]` or any character from U+0080 up (the server lexer
+/// reads every non-ASCII byte as a letter).
+pub(crate) fn pg_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
+}
+
+/// Later characters of a Postgres name: also digits and `$`.
+pub(crate) fn pg_ident_cont(c: char) -> bool {
+    pg_ident_start(c) || c.is_ascii_digit() || c == '$'
+}
+
 /// Length of a Postgres dollar-quote opener (`$$` or `$tag$`) at `i`, if there is one.
-/// A `$` right after a name character is part of that name (`a$b`), and `$1` is a parameter.
+/// A `$` right after a name character is part of that name (`a$b`, `×$$`), and `$1` is a parameter.
 pub(crate) fn dollar_tag_len(chars: &[char], i: usize) -> Option<usize> {
+    if i > 0 && pg_ident_cont(chars[i - 1]) {
+        return None;
+    }
+    dollar_opener_len(chars, i)
+}
+
+/// Length of `$$` / `$tag$` at `i`, whatever comes before it. Tags: `[A-Za-z_\x80-]` then also digits.
+pub(crate) fn dollar_opener_len(chars: &[char], i: usize) -> Option<usize> {
     if chars.get(i) != Some(&'$') {
         return None;
     }
-    if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_' || chars[i - 1] == '$') {
-        return None;
-    }
     let mut j = i + 1;
-    if chars.get(j).is_some_and(|c| c.is_alphabetic() || *c == '_') {
-        while chars.get(j).is_some_and(|c| c.is_alphanumeric() || *c == '_') {
+    if chars.get(j).is_some_and(|c| pg_ident_start(*c)) {
+        while chars.get(j).is_some_and(|c| pg_ident_start(*c) || c.is_ascii_digit()) {
             j += 1;
         }
     }

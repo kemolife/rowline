@@ -133,6 +133,10 @@ fn words_with_paren(masked: &str) -> Vec<(String, bool)> {
 
 /// Returns the one statement in `sql` if it only reads data.
 pub fn check(sql: &str, dialect: Dialect) -> AppResult<String> {
+    if dialect == Dialect::Postgres && sql.contains('\r') {
+        // the server ends `--` comments at \r: refused outright, so no reading of it can differ
+        return Err(AppError::msg("Read-only queries can't contain a carriage return (\\r). Use plain line breaks (\\n)."));
+    }
     let statements = sqlgen::split_statements(sql);
     let text = match statements.as_slice() {
         [] => return Err(AppError::msg("The query is empty.")),
@@ -345,10 +349,26 @@ struct PgMasked {
     unicode_ident: bool,
     /// a quote, dollar quote or comment that never ends
     unclosed: bool,
+    /// a character from U+0080 up outside string literals, quoted names and dollar-quoted bodies
+    non_ascii: bool,
+    /// a `$$` / `$tag$` right after a number or parameter: the server may open a dollar quote there
+    ambiguous_dollar: bool,
 }
 
 fn pg_ident_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '$'
+    sqlgen::pg_ident_cont(c)
+}
+
+/// True when the `$` at `i` follows a number or a parameter (`1$$`, `$1$$`), not a name.
+fn dollar_after_number(chars: &[char], i: usize) -> bool {
+    if i == 0 || !pg_ident_char(chars[i - 1]) || sqlgen::dollar_opener_len(chars, i).is_none() {
+        return false;
+    }
+    let mut k = i;
+    while k > 0 && pg_ident_char(chars[k - 1]) {
+        k -= 1;
+    }
+    !sqlgen::pg_ident_start(chars[k])
 }
 
 /// Postgres lexer: `"ident"` (with `""`), `'…'` (with `''`; backslash escapes only when `backslash`, i.e.
@@ -360,10 +380,15 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
     let mut out = String::with_capacity(sql.len());
     let mut unicode_ident = false;
     let mut unclosed = false;
+    let mut non_ascii = false;
+    let mut ambiguous_dollar = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
+        if c == '$' && dollar_after_number(&chars, i) {
+            ambiguous_dollar = true;
+        }
         if c == '\'' {
             let e_prefix = i >= 1
                 && matches!(chars[i - 1], 'e' | 'E')
@@ -410,6 +435,7 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
             i += 1;
         } else if let Some(len) = sqlgen::dollar_tag_len(&chars, i) {
             let tag = &chars[i..i + len];
+            non_ascii |= !tag.iter().all(char::is_ascii);
             let mut j = i + len;
             loop {
                 if j + len > chars.len() {
@@ -425,7 +451,9 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
             }
             out.push(' ');
         } else if c == '-' && next == Some('-') {
-            while i < chars.len() && chars[i] != '\n' {
+            // the server ends a `--` comment at \n or \r
+            while i < chars.len() && chars[i] != '\n' && chars[i] != '\r' {
+                non_ascii |= !chars[i].is_ascii();
                 i += 1;
             }
             out.push(' ');
@@ -433,6 +461,9 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
             let mut depth = 1;
             i += 2;
             while depth > 0 {
+                if chars.get(i).is_some_and(|ch| !ch.is_ascii()) {
+                    non_ascii = true;
+                }
                 match (chars.get(i), chars.get(i + 1)) {
                     (None, _) => {
                         unclosed = true;
@@ -451,11 +482,12 @@ fn mask_postgres(sql: &str, backslash: bool, keep_idents: bool) -> PgMasked {
             }
             out.push(' ');
         } else {
+            non_ascii |= !c.is_ascii();
             out.push(c);
             i += 1;
         }
     }
-    PgMasked { text: out, unicode_ident, unclosed }
+    PgMasked { text: out, unicode_ident, unclosed, non_ascii, ambiguous_dollar }
 }
 
 /// Upper-case words of masked text with the next non-space character after each.
@@ -490,6 +522,14 @@ fn check_postgres(text: String) -> AppResult<String> {
         }
         if plain.text.contains(';') {
             return Err(one_statement());
+        }
+        if plain.non_ascii || idents.non_ascii {
+            return Err(AppError::msg(
+                "Non-ASCII characters are only allowed inside quoted strings and \"quoted\" names in read-only queries (not in SQL keywords, plain names or comments).",
+            ));
+        }
+        if plain.ambiguous_dollar || idents.ambiguous_dollar {
+            return Err(AppError::msg("A $ right after a number or parameter is not allowed in read-only queries (it may start a dollar quote). Add a space."));
         }
         if idents.unicode_ident {
             return Err(AppError::msg("Unicode-escaped names (U&\"…\") are not allowed in read-only queries."));
@@ -979,6 +1019,45 @@ mod tests {
         // a dollar quote can't open inside a name or hide behind a parameter
         pg_ok("select $1::int");
         pg_refused("select a$$ from t; delete from t");
+    }
+
+    /// Review PoCs: each hid a call from the checker that the server would run.
+    const LEXER_POCS: &[&str] = &[
+        "select 1 --\r, pg_sleep(9), (select count(*) from pg_stat_activity)",
+        "select $×$'$×$ , pg_terminate_backend(1) --'",
+        "select 1 as ×$$ , pg_sleep(9) as x$$",
+        "select ×E'\\' , pg_sleep(9) --'",
+    ];
+
+    #[test]
+    fn postgres_lexer_reads_cr_and_non_ascii_like_the_server() {
+        // `--` ends at \r too; every char >= U+0080 is a name char (dollar tags, `$` after a name, E'…' prefix)
+        for sql in LEXER_POCS {
+            let masked = mask_postgres(sql, false, false).text;
+            assert!(masked.contains("pg_sleep") || masked.contains("pg_terminate_backend"), "hidden from the checker: {sql:?} -> {masked:?}");
+        }
+        assert_eq!(sqlgen::dollar_tag_len(&"$×$".chars().collect::<Vec<_>>(), 0), Some(3));
+        assert_eq!(sqlgen::dollar_tag_len(&"×$$".chars().collect::<Vec<_>>(), 1), None);
+    }
+
+    #[test]
+    fn postgres_refuses_cr_and_non_ascii_code() {
+        for sql in LEXER_POCS {
+            pg_refused(sql);
+        }
+        assert!(pg_refused("select 1 --\r, pg_sleep(9)").contains("carriage return"));
+        assert!(pg_refused("select 'a\rb'").contains("carriage return"), "any \\r, even in a string");
+        assert!(pg_refused("select 1 as ×").contains("Non-ASCII"));
+        assert!(pg_refused("select 1 -- café").contains("Non-ASCII"), "comments too");
+        assert!(pg_refused("select 1 /* café */").contains("Non-ASCII"));
+        assert!(pg_refused("select $é$ x $é$").contains("Non-ASCII"), "dollar-quote tags too");
+        // a `$` right after a number: the server may open a dollar quote there
+        pg_refused("select 1$$'$$, pg_sleep(1) --'");
+        // non-ASCII inside strings, quoted names and dollar-quoted bodies is fine
+        for sql in ["select 'café'", "select \"naïve\" from t", "select $$ünï$$", "select $a$ é $a$", "select E'\\u00e9 é'"] {
+            pg_ok(sql);
+        }
+        pg_ok("select a1$b from t");
     }
 
     #[test]
