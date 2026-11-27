@@ -1,6 +1,6 @@
 # PostgreSQL support — design
 
-Status: draft for review · 2026-11-27
+Status: approved by user (strict prod lock) · 2026-11-27
 
 ## Intent
 
@@ -118,10 +118,21 @@ Two locks for every read-only path (Claude panel, MCP tools, `udb query`):
    itself then refuses writes, even if the checker misses something. (Note: a read-only
    transaction does not stop `pg_read_file` or `dblink` — that's why lock 1 blocks them.)
 
-App UI rules stay exactly as for MySQL today:
-- On **prod**, statements that change data ask for confirmation before they run
-  (`QueryTabView`), and row edits go through the review dialog. They are not blocked.
+App UI on **prod** Postgres — strict (user's decision: "security strict all time"):
+- Every query of a prod Postgres connection runs inside a READ ONLY transaction,
+  set by the server (`BEGIN READ ONLY` / `SET LOCAL transaction_read_only = on`), in
+  the grid, the SQL editor, counts and everything else. Postgres refuses writes.
+- Writing needs an explicit **"Unlock writes"** action per tab (SQL tab or table tab),
+  with a confirmation dialog naming the connection and database. The tab shows a clear
+  "writes unlocked" state. The unlock ends when the tab closes or the app restarts.
+  It is never saved and never applies to other tabs, Claude or `udb`.
+- While unlocked, today's MySQL prod rules still apply on top: statements that change
+  data ask for confirmation, row edits go through the review dialog.
+- Non-prod environments behave like MySQL today.
 - Claude access default: prod = Schema, others = Data.
+- MySQL prod keeps today's behaviour in this work (out of scope; a follow-up can bring
+  the same lock to MySQL with `SET SESSION TRANSACTION READ ONLY`).
+- When a choice is between safer and more convenient, this work picks safer.
 
 TLS: same `TlsMode` as MySQL. Map: Off → `sslmode=disable`, Required → `require`
 (no cert check), Verify → `verify-full`. Default Verify for remote hosts, Off for
