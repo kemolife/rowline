@@ -618,14 +618,17 @@ pub(crate) fn pg_skip_comments(chars: &[char], mut i: usize) -> usize {
 }
 
 fn is_only_comments(text: &str) -> bool {
-    strip_leading_comments(text).trim().is_empty()
+    strip_leading_comments(text, false).trim().is_empty()
 }
 
-fn strip_leading_comments(text: &str) -> &str {
+/// Text after leading whitespace and comments. `--` / `#` comments end at \n, and also at \r with `cr`
+/// (the Postgres lexer).
+fn strip_leading_comments(text: &str, cr: bool) -> &str {
     let mut t = text.trim_start();
     loop {
         if let Some(rest) = t.strip_prefix("--").or_else(|| t.strip_prefix('#')) {
-            t = rest.find('\n').map(|p| &rest[p + 1..]).unwrap_or("").trim_start();
+            let end = if cr { rest.find(['\n', '\r']) } else { rest.find('\n') };
+            t = end.map(|p| &rest[p + 1..]).unwrap_or("").trim_start();
         } else if let Some(rest) = t.strip_prefix("/*") {
             t = rest.find("*/").map(|p| &rest[p + 2..]).unwrap_or("").trim_start();
         } else {
@@ -639,11 +642,11 @@ fn first_word(text: &str) -> String {
 }
 
 /// For `EXPLAIN …`: the explained statement when the options include ANALYZE (which runs it), else `None`.
-fn explain_analyze_target(after_keyword: &str) -> Option<&str> {
+fn explain_analyze_target(after_keyword: &str, cr: bool) -> Option<&str> {
     let mut rest = after_keyword.trim_start();
     let mut analyze = false;
     loop {
-        rest = strip_leading_comments(rest);
+        rest = strip_leading_comments(rest, cr);
         if let Some(inner) = rest.strip_prefix('(') {
             // Postgres option list: EXPLAIN (ANALYZE, BUFFERS) …
             let end = inner.find(')').map(|p| p + 1).unwrap_or(inner.len());
@@ -675,13 +678,19 @@ fn explain_analyze_target(after_keyword: &str) -> Option<&str> {
 const DATA_CHANGE_WORDS: &[&str] = &["INSERT", "UPDATE", "DELETE", "MERGE"];
 
 /// True for statements that only read data. Used for the production safety check.
+/// A `--` comment ends at \n for MySQL and SQLite but also at \r for Postgres: with a \r in the text both
+/// readings must be reads.
 pub fn is_read_only_statement(sql: &str) -> bool {
-    let body = strip_leading_comments(sql);
+    read_only_reading(sql, false) && (!sql.contains('\r') || read_only_reading(sql, true))
+}
+
+fn read_only_reading(sql: &str, cr: bool) -> bool {
+    let body = strip_leading_comments(sql, cr);
     let keyword = first_word(body);
     match keyword.as_str() {
         // EXPLAIN ANALYZE runs the statement it explains
-        "EXPLAIN" | "DESCRIBE" | "DESC" => match explain_analyze_target(&body[keyword.len()..]) {
-            Some(target) => is_read_only_statement(target),
+        "EXPLAIN" | "DESCRIBE" | "DESC" => match explain_analyze_target(&body[keyword.len()..], cr) {
+            Some(target) => read_only_reading(target, cr),
             None => true,
         },
         "WITH" => !crate::readonly::code_words(body).iter().any(|w| DATA_CHANGE_WORDS.contains(&w.as_str())),
@@ -1024,6 +1033,10 @@ mod tests {
     #[test]
     fn detects_read_only_statements() {
         assert!(is_read_only_statement("  -- hi\n SELECT 1"));
+        // Postgres ends `--` at \r, MySQL at \n: both readings must be reads
+        assert!(!is_read_only_statement("--x\rdelete from t\nselect 1"));
+        assert!(!is_read_only_statement("--x\rselect 1\ndelete from t"));
+        assert!(is_read_only_statement("-- hi\r\nselect 1"));
         assert!(is_read_only_statement("/* x */ show tables"));
         assert!(is_read_only_statement("with a as (select 1) select * from a"));
         assert!(!is_read_only_statement("update t set a=1"));

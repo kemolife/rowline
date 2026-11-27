@@ -15,6 +15,8 @@ use tokio_postgres::{CancelToken, Client, SimpleQueryMessage};
 /// READ ONLY transaction). `BEGIN` / `START TRANSACTION` inside it are only a warning, so they are not listed.
 const TRANSACTION_END: &[&str] = &["COMMIT", "END", "ROLLBACK", "ABORT"];
 
+const NO_LONGER_READ_ONLY: &str = "The script ended the read-only transaction of this prod tab, so it was stopped and rolled back. Use \"Unlock writes\" on this tab to change data.";
+
 const TRANSACTION_REFUSED: &str = "COMMIT, ROLLBACK, END, ABORT and PREPARE TRANSACTION can't run on a read-only prod tab. Use \"Unlock writes\" on this tab to change data.";
 
 impl PostgresSession {
@@ -104,11 +106,25 @@ impl PostgresSession {
             return Err(AppError::msg(TRANSACTION_REFUSED));
         }
         let tx = self.begin(database, schema, access(locked)).await?;
+        // locked: after every statement the READ ONLY transaction must still be the one begin() started
+        let marker = match locked {
+            true => match transaction_marker(&tx.c).await {
+                Ok(m) => Some(m),
+                Err(e) => return tx.finish(Err(e)).await,
+            },
+            false => None,
+        };
         let mut results = Vec::new();
         let mut first_error = None;
         let mut failed = false;
         for st in statements {
-            match self.run_tracked(&tx.c, &st.text, max_rows, true).await {
+            let ran = self.run_tracked(&tx.c, &st.text, max_rows, true).await;
+            if let (Ok(_), Some(m)) = (&ran, &marker) {
+                if let Err(e) = still_read_only(&tx.c, m).await {
+                    return tx.end(Err(e), false).await;
+                }
+            }
+            match ran {
                 Ok(mut res) => {
                     res.statement = Some(st.text);
                     results.push(res);
@@ -349,46 +365,41 @@ fn refuse_bytea(changes: &ChangeSet, types: &HashMap<String, String>) -> AppResu
     Ok(())
 }
 
-/// First keyword of one statement, after whitespace and comments (nested `/* */` as Postgres reads them).
+/// First keywords of one statement, after whitespace and comments (as Postgres reads them: nested `/* */`,
+/// `--` up to \n or \r).
 fn first_words(sql: &str) -> Vec<String> {
     let chars: Vec<char> = sql.chars().collect();
     let mut i = 0;
     let mut words = Vec::new();
     while i < chars.len() && words.len() < 2 {
-        let c = chars[i];
-        if c.is_whitespace() {
-            i += 1;
-        } else if c == '-' && chars.get(i + 1) == Some(&'-') {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
-        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
-            let mut depth = 0;
-            while i < chars.len() {
-                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
-                    depth += 1;
-                    i += 2;
-                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-                    depth -= 1;
-                    i += 2;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
+        i = sqlgen::pg_skip_comments(&chars, i);
+        match chars.get(i) {
+            Some(c) if c.is_alphabetic() || *c == '_' => {
+                let start = i;
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$') {
                     i += 1;
                 }
+                words.push(chars[start..i].iter().collect::<String>().to_uppercase());
             }
-        } else if c.is_alphabetic() || c == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$') {
-                i += 1;
-            }
-            words.push(chars[start..i].iter().collect::<String>().to_uppercase());
-        } else {
-            break;
+            _ => break,
         }
     }
     words
+}
+
+/// What tells the transaction of a locked call apart from any later one: its start time.
+async fn transaction_marker(c: &Client) -> AppResult<String> {
+    Ok(c.query_one("SELECT transaction_timestamp()::text", &[]).await?.get(0))
+}
+
+/// Err when the transaction is no longer the READ ONLY one with `marker` (a statement ended it).
+async fn still_read_only(c: &Client, marker: &str) -> AppResult<()> {
+    let row = c.query_one("SELECT current_setting('transaction_read_only'), transaction_timestamp()::text", &[]).await?;
+    let (read_only, started): (String, String) = (row.get(0), row.get(1));
+    if read_only != "on" || started != marker {
+        return Err(AppError::msg(NO_LONGER_READ_ONLY));
+    }
+    Ok(())
 }
 
 /// A statement that would end the transaction it runs in.
@@ -420,6 +431,9 @@ mod tests {
         for sql in ["select 1", "begin", "start transaction", "prepare p as select 1", "select 'commit'", "update t set \"end\" = 1", "savepoint s"] {
             assert!(!ends_transaction(sql), "{sql}");
         }
+        // `--` ends at \r too (review PoC: `--x\rCOMMIT\nWORK` hid the COMMIT)
+        assert!(ends_transaction("--x\rCOMMIT\nWORK"));
+        assert!(ends_transaction("-- x\r\nrollback"));
         assert!(is_plain_query("-- x\nselect 1") && is_plain_query("with a as (select 1) select * from a") && is_plain_query("TABLE t"));
         assert!(!is_plain_query("with a as (delete from t returning *) select * from a"));
         assert!(!is_plain_query("insert into t values (1) returning *") && !is_plain_query("explain select 1"));
@@ -615,6 +629,30 @@ mod tests {
         assert_eq!(s.execute(None, None, &format!("update {t} set n = n + 1"), 10, true).await.unwrap()[0].affected_rows, Some(1));
         assert_eq!(s.execute(None, None, &format!("select n from {t}"), 10, false).await.unwrap()[0].rows[0][0], json!(6));
         s.execute(None, None, &format!("DROP TABLE {t}"), 1, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_comment_ended_by_cr_does_not_hide_commit_on_a_locked_tab() {
+        let Some(s) = session(true).await else { return };
+        let t = "rowline_pg_cr_commit";
+        s.execute(None, None, &format!("DROP TABLE IF EXISTS {t}; CREATE TABLE {t} (id int); INSERT INTO {t} VALUES (1)"), 10, true).await.unwrap();
+        let err = s.execute(None, None, &format!("--x\rCOMMIT\nWORK; delete from {t}"), 10, false).await.unwrap_err().to_string();
+        assert!(err.contains("Unlock writes"), "{err}");
+        assert_eq!(s.count(page(None, t), false).await.unwrap(), 1, "nothing was deleted");
+        s.execute(None, None, &format!("DROP TABLE {t}"), 1, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_locked_script_stops_when_its_transaction_is_no_longer_read_only() {
+        let Some(s) = session(true).await else { return };
+        let tx = s.begin(None, None, Access::ReadOnly).await.unwrap();
+        let marker = transaction_marker(&tx.c).await.unwrap();
+        assert!(still_read_only(&tx.c, &marker).await.is_ok());
+        // a statement the checks before running missed ends the READ ONLY transaction
+        tx.c.batch_execute("COMMIT").await.unwrap();
+        let err = still_read_only(&tx.c, &marker).await.unwrap_err().to_string();
+        assert!(err.contains("read-only transaction"), "{err}");
+        let _ = tx.finish(Ok(())).await;
     }
 
     #[tokio::test]

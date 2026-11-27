@@ -120,5 +120,7 @@ mod tests {
         assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": sql, "engine": "postgres" })).await.unwrap(), json!(false));
         let hidden = "--x\rCOMMIT\nWORK; select 1";
         assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": hidden, "engine": "postgres" })).await.unwrap(), json!(false));
+        let hidden = "--x\rdelete from t\nselect 1";
+        assert_eq!(dispatch(&state, "is_read_only", json!({ "sql": hidden, "engine": "postgres" })).await.unwrap(), json!(false));
     }
 }
