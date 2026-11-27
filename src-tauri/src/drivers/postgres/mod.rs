@@ -94,16 +94,20 @@ fn tls_connector(mode: TlsMode) -> AppResult<MakeTlsConnector> {
     Ok(MakeTlsConnector::new(connector))
 }
 
-/// Only plain zone names go into `SET LOCAL TimeZone = '…'`.
+/// A zone name that is safe in `SET LOCAL TimeZone = '…'`: only `[A-Za-z0-9_+\-/]`, so no quote or backslash.
+fn plain_zone(tz: &str) -> bool {
+    !tz.is_empty() && tz.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
+}
+
+/// The Mac's zone, when it is a plain name.
 fn local_time_zone() -> Option<String> {
     let tz = iana_time_zone::get_timezone().ok()?;
-    let plain = !tz.is_empty() && tz.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
-    plain.then_some(tz)
+    plain_zone(&tz).then_some(tz)
 }
 
 /// `tz` when the server knows that zone, else None. Asked outside a transaction (nothing to roll back).
 async fn usable_time_zone(c: &Client, tz: Option<String>) -> Option<String> {
-    let tz = tz?;
+    let tz = tz.filter(|t| plain_zone(t))?;
     c.query_one("SELECT now() AT TIME ZONE $1::text", &[&tz]).await.ok()?;
     Some(tz)
 }
@@ -263,7 +267,8 @@ fn begin_sql(schema: Option<&str>, time_zone: Option<&str>, access: Access) -> S
     if let Some(s) = schema.filter(|s| !s.is_empty()) {
         sql.push_str(&format!("; SET LOCAL search_path = {}, public", Dialect::Postgres.quote_ident(s)));
     }
-    if let Some(tz) = time_zone {
+    // checked here too: the name is written into SQL text
+    if let Some(tz) = time_zone.filter(|t| plain_zone(t)) {
         sql.push_str(&format!("; SET LOCAL TimeZone = '{tz}'"));
     }
     // every transaction: '…' strings read as the checker and the splitter read them (no backslash escapes)
@@ -482,6 +487,23 @@ mod tests {
         assert_eq!(s.time_zone.as_deref(), Some("America/New_York"));
         let r = s.execute(None, None, "SHOW TimeZone", 1, false).await.unwrap();
         assert_eq!(r[0].rows[0][0], "America/New_York");
+    }
+
+    #[test]
+    fn a_time_zone_name_can_not_inject_sql() {
+        for tz in ["UTC'; DROP TABLE t; --", "UTC\\", "a b", "", "Europe/Kyiv'"] {
+            let sql = begin_sql(None, Some(tz), Access::ReadWrite);
+            assert!(!sql.contains("TimeZone"), "{tz:?}: {sql}");
+        }
+        assert!(begin_sql(None, Some("America/Port-au-Prince"), Access::ReadWrite).contains("SET LOCAL TimeZone = 'America/Port-au-Prince'"));
+        assert!(begin_sql(None, Some("Etc/GMT+3"), Access::ReadWrite).contains("TimeZone = 'Etc/GMT+3'"));
+    }
+
+    #[tokio::test]
+    async fn connect_drops_a_time_zone_that_is_not_a_plain_name() {
+        let Some(p) = params() else { return };
+        let s = PostgresSession::connect_with_zone(p.as_params(false), Some("UTC'; SELECT 1; --".into())).await.unwrap();
+        assert_eq!(s.time_zone, None);
     }
 
     #[test]
